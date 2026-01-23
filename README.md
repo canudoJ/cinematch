@@ -109,7 +109,11 @@ Este proyecto ha sido desarrollado como parte de un aprendizaje, utilizando prog
 
 Este proyecto es de uso personal.
 
+---
+## 🚧 Estado del Proyecto
 
+Este proyecto se encuentra actualmente en **fase de desarrollo (WIP)**.
+Algunas funcionalidades están pendientes de implementación y es posible encontrar aspectos por pulir. Sigo trabajando activamente en ello para mejorar la experiencia y añadir nuevas características.
 ---
 
 **Desarrollado por Javier Canudo Tavara usando Next.js, React y Supabase**
