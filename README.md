@@ -107,9 +107,9 @@ Este proyecto ha sido desarrollado como parte de un aprendizaje, utilizando prog
 
 ## 📄 Licencia
 
-Este proyecto es de uso educativo y personal.
+Este proyecto es de uso personal.
 
 
 ---
 
-**Desarrollado usando Next.js, React y Supabase**
+**Desarrollado por Javier Canudo Tavara usando Next.js, React y Supabase**
