@@ -4,6 +4,9 @@ import { useDecks } from '@/context/DeckContext';
 import { useLanguage } from '@/context/LanguageContext';
 import { PROVIDERS } from '@/lib/constants';
 import CloseButton from './ui/CloseButton';
+import { Film, Tv, Infinity, Flame, Dices, Ghost, Frown, Laugh, FolderOpen, type LucideIcon } from 'lucide-react';
+
+const ROULETTE_ICONS: Record<string, LucideIcon> = { Flame, Dices, Ghost, Frown, Laugh, FolderOpen };
 
 export interface RouletteConfig {
     mediaType: 'movie' | 'tv' | 'both';
@@ -19,11 +22,11 @@ interface RouletteSetupModalProps {
 }
 
 const SOURCES = [
-    { id: 'trending', label: '🔥 Trending', value: 'trending', type: 'trending' },
-    { id: 'surprise', label: '🎲 Sorpréndeme', value: 'surprise', type: 'surprise' },
-    { id: 'horror', label: '👻 Terror', value: '27,53', type: 'genre' },
-    { id: 'drama', label: '😢 Drama', value: '18', type: 'genre' },
-    { id: 'comedy', label: '😂 Comedia', value: '35', type: 'genre' },
+    { id: 'trending', label: 'Trending', value: 'trending', type: 'trending', iconName: 'Flame' },
+    { id: 'surprise', label: 'Sorpréndeme', value: 'surprise', type: 'surprise', iconName: 'Dices' },
+    { id: 'horror', label: 'Terror', value: '27,53', type: 'genre', iconName: 'Ghost' },
+    { id: 'drama', label: 'Drama', value: '18', type: 'genre', iconName: 'Frown' },
+    { id: 'comedy', label: 'Comedia', value: '35', type: 'genre', iconName: 'Laugh' },
 ];
 
 export default function RouletteSetupModal({ onClose, onCreate }: RouletteSetupModalProps) {
@@ -34,16 +37,17 @@ export default function RouletteSetupModal({ onClose, onCreate }: RouletteSetupM
     // State
     const [mediaType, setMediaType] = useState<'movie' | 'tv' | 'both'>('movie');
     const [selectedSource, setSelectedSource] = useState<any>(SOURCES[0]);
-    const [selectedProviders, setSelectedProviders] = useState<string[]>(PROVIDERS.map(p => p.id)); // Default: ALL
+    const [selectedProviders, setSelectedProviders] = useState<string[]>([]); // Default: none selected
 
     // Combine static sources with decks
     const allSources = [
         ...SOURCES,
         ...myDecks.map(d => ({
             id: d.id,
-            label: `📂 ${d.title}`,
+            label: d.title,
             value: d.id,
-            type: 'deck'
+            type: 'deck',
+            iconName: 'FolderOpen'
         }))
     ];
 
@@ -56,11 +60,14 @@ export default function RouletteSetupModal({ onClose, onCreate }: RouletteSetupM
     };
 
     const handleCreate = () => {
+        // Si el usuario no selecciona ninguna plataforma, usamos todas como fallback
+        const effectiveProviders = selectedProviders.length > 0 ? selectedProviders : PROVIDERS.map(p => p.id);
+
         const config: RouletteConfig = {
             mediaType,
             sourceType: selectedSource.type as any,
             sourceValue: selectedSource.value,
-            providers: selectedProviders,
+            providers: effectiveProviders,
             minRating: selectedSource.type === 'surprise' ? 6.0 : 0
         };
         onCreate(config);
@@ -72,13 +79,21 @@ export default function RouletteSetupModal({ onClose, onCreate }: RouletteSetupM
             display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
         }}>
             <div className="animate-pop-in" style={{
-                background: 'var(--bg-darker)', width: '100%', maxWidth: '500px',
+                background: 'var(--background)', width: '100%', maxWidth: '500px',
                 borderRadius: '24px', border: '1px solid #333', overflow: 'hidden',
                 display: 'flex', flexDirection: 'column', maxHeight: '90vh'
             }}>
                 {/* Header */}
                 <div style={{ padding: '20px', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h2 style={{ margin: 0, fontSize: '1.2rem' }}>Configurar Sala</h2>
+                    <h2
+                        className="heading-lg"
+                        style={{
+                            margin: 0,
+                            color: 'var(--secondary)'
+                        }}
+                    >
+                        Configurar Sala
+                    </h2>
                     <CloseButton onClose={onClose} className="relative top-0 right-0" size="sm" />
                 </div>
 
@@ -94,13 +109,13 @@ export default function RouletteSetupModal({ onClose, onCreate }: RouletteSetupM
                                     onClick={() => setMediaType(type)}
                                     style={{
                                         flex: 1, padding: '10px', borderRadius: '8px', border: 'none', fontWeight: 'bold', cursor: 'pointer',
-                                        background: mediaType === type ? 'var(--accent-green)' : 'transparent',
+                                        background: mediaType === type ? 'var(--secondary)' : 'transparent',
                                         color: mediaType === type ? 'black' : '#aaa',
                                         transition: 'all 0.2s',
                                         fontSize: '0.85rem'
                                     }}
                                 >
-                                    {type === 'movie' ? '🎬 Películas' : type === 'tv' ? '📺 Series' : '♾️ Ambos'}
+                                    {type === 'movie' ? <><Film size={18} className="inline-block mr-1.5 -mt-0.5" aria-hidden /> Películas</> : type === 'tv' ? <><Tv size={18} className="inline-block mr-1.5 -mt-0.5" aria-hidden /> Series</> : <><Infinity size={18} className="inline-block mr-1.5 -mt-0.5" aria-hidden /> Ambos</>}
                                 </button>
                             ))}
                         </div>
@@ -116,16 +131,18 @@ export default function RouletteSetupModal({ onClose, onCreate }: RouletteSetupM
                                     onClick={() => setSelectedSource(src)}
                                     style={{
                                         flexShrink: 0, width: '120px', height: '100px',
-                                        background: selectedSource.id === src.id ? 'var(--accent-green)' : '#333',
+                                        background: selectedSource.id === src.id ? 'var(--secondary)' : '#333',
                                         color: selectedSource.id === src.id ? 'black' : 'white',
                                         borderRadius: '16px', padding: '15px',
                                         display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center',
                                         cursor: 'pointer', border: '2px solid transparent',
-                                        borderColor: selectedSource.id === src.id ? 'var(--accent-green)' : '#444'
+                                        borderColor: selectedSource.id === src.id ? 'var(--secondary)' : '#444'
                                     }}
                                 >
-                                    <div style={{ fontSize: '1.5rem', marginBottom: '5px' }}>{src.label.split(' ')[0]}</div>
-                                    <div style={{ fontSize: '0.9rem', fontWeight: 'bold', lineHeight: '1.2' }}>{src.label.split(' ').slice(1).join(' ')}</div>
+                                    <div style={{ fontSize: '1.5rem', marginBottom: '5px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        {src.iconName && ROULETTE_ICONS[src.iconName] && React.createElement(ROULETTE_ICONS[src.iconName], { size: 28, 'aria-hidden': true })}
+                                    </div>
+                                    <div style={{ fontSize: '0.9rem', fontWeight: 'bold', lineHeight: '1.2' }}>{src.label}</div>
                                 </div>
                             ))}
                         </div>
@@ -161,7 +178,7 @@ export default function RouletteSetupModal({ onClose, onCreate }: RouletteSetupM
                         onClick={handleCreate}
                         style={{
                             width: '100%', padding: '16px', borderRadius: '12px',
-                            background: 'var(--accent-red-alt)', color: 'white', border: 'none',
+                            background: 'var(--destructive)', color: 'white', border: 'none',
                             fontSize: '1.1rem', fontWeight: '900', cursor: 'pointer',
                             boxShadow: '0 4px 15px rgba(255, 71, 87, 0.3)'
                         }}

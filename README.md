@@ -1,119 +1,75 @@
 # 🎬 CineMatch
 
-**Aplicación web para encontrar películas y series en común con tus amigos**
+**Plataforma social para decidir qué película o serie ver, solo o con amigos.**
 
-> Proyecto desarrollado como estudiante de 2º de DAM (Desarrollo de Aplicaciones Multiplataforma)
+CineMatch resuelve el clásico "¿qué vemos esta noche?". En lugar de navegar listas interminables, deslizas tarjetas estilo Tinder filtradas por tus plataformas de streaming y géneros favoritos, retas a tus amigos con recomendaciones y montáis una sesión en tiempo real para encontrar una película que os guste a todos.
 
-## 📋 Descripción
-
-CineMatch es una aplicación web moderna que resuelve el problema de "¿Qué vemos esta noche?". Permite a los usuarios descubrir películas y series en base a sus plataformas contratadas o aquellas que coinciden con sus preferencias y las de sus amigos, facilitando la decisión de qué ver juntos o descubrir nuevas opciones.
-
-### Características principales
-
-- 🎯 **Sistema de matching**: Encuentra películas que coinciden con tus gustos y los de tus amigos
-- 👥 **Sistema social**: Agrega amigos, envía solicitudes y gestiona tu red social
-- 🎲 **Múltiples modos de juego**:
-  - **Swipe Deck**: Descubre distintas opciones mientras deslizas como en aplicaciones como Tinder
-  - **Russian Roulette**: Modo rápido de decisión entre amigos para los mas indecisos
-  - **Ice Breaker**: Test de afinidad para descubrir opciones por los gustos en comun.
-  - **Challenge Mode**: Reta a tus amigos con peliculas para ver
-- 📚 **Decks personalizados**: Crea colecciones personalizadas de películas o series para momentos concretos.
-- 🎬 **Integración con TMDB**: Base de datos completa de películas y series
-- 🌐 **Multiidioma**: Español e Inglés
-- 🔐 **Autenticación segura**: Sistema de usuarios con Supabase
-
-## 🛠️ Stack Tecnológico
-
-### Frontend
-- **Next.js 16** (App Router) - Framework React
-- **React 19** - Biblioteca UI
-- **TypeScript** - Tipado estático
-- **Tailwind CSS** - Estilos utility-first
-- **Lucide React** - Iconos
-
-### Backend & Base de Datos
-- **Supabase** - Backend as a Service
-  - PostgreSQL (base de datos)
-  - Autenticación
-  - Row Level Security (RLS)
-  - Storage (avatars)
-
-### APIs Externas
-- **The Movie Database (TMDB)** - API de películas y series
-
-### Herramientas de Desarrollo
-- **ESLint** - Linter
-- **Git** - Control de versiones
-
-
-## 🎯 Funcionalidades Implementadas
-
-### Autenticación
-- ✅ Registro de usuarios
-- ✅ Login/Logout
-- ✅ Gestión de perfil (username, avatar)
-- ✅ Protección de rutas
-
-### Sistema Social
-- ✅ Búsqueda de usuarios
-- ✅ Envío/aceptación de solicitudes de amistad
-- ✅ Lista de amigos
-- ✅ Enlaces de invitación
-- ✅ Eliminación de amigos
-
-### Sistema de Retos
-- ✅ Envío de retos a amigos
-- ✅ Recepción y resolución de retos
-- ✅ Historial de retos enviados
-- ✅ Persistencia en base de datos
-
-### Decks
-- ✅ Creación de decks personalizados
-- ✅ Agregar/eliminar películas
-- ✅ Tags y descripciones
-- ✅ Modo de juego con decks
-
-### Integración TMDB
-- ✅ Búsqueda de películas/series
-- ✅ Información detallada
-- ✅ Enlaces a plataformas de streaming
-- ✅ Filtrado por plataformas
-
-## 📚 Documentación Adicional
-
-- [Manual Técnico](./MANUAL_TECNICO.md) - Documentación técnica detallada
-- [Manual de Usuario](./MANUAL_USUARIO.md) - Guía de uso de la aplicación
-
-## 🎓 Aprendizajes y Tecnologías
-
-Este proyecto ha sido desarrollado utilizando **programación asistida con IA** como herramienta de aprendizaje, permitiendo:
-
-- Aprender arquitectura moderna de aplicaciones web
-- Entender patrones de diseño (Singleton, Context API)
-- Trabajar con bases de datos relacionales
-- Integrar APIs externas
-- Desarrollar interfaces de usuario modernas
-
-## 📝 Notas del Desarrollador
-
-Este proyecto ha sido desarrollado como parte de un aprendizaje, utilizando programación asistida con IA para:
-- Acelerar el desarrollo
-- Aprender mejores prácticas
-- Entender arquitecturas complejas
-- Implementar funcionalidades avanzadas
-- Aplicar nociones de ingienria de prompts
-
-**Todas las decisiones técnicas, estructura del código y funcionalidades han sido diseñadas y comprendidas por el desarrollador.**
-
-## 📄 Licencia
-
-Este proyecto es de uso personal.
+> Proyecto final de Grado Superior desarrollado por **Javier Canudo Tavara**.
 
 ---
-## 🚧 Estado del Proyecto
 
-Este proyecto se encuentra actualmente en **fase de desarrollo (WIP)**.
-Algunas funcionalidades están pendientes de implementación y es posible encontrar aspectos por pulir. Sigo trabajando activamente en ello para mejorar la experiencia y añadir nuevas características.
+## ✨ Funcionalidades
+
+| Área | Qué hace |
+|---|---|
+| **Swipe feed** | Tarjetas con swipe táctil/ratón; contenido de TMDB filtrado por plataforma (Netflix, Prime Video, Disney+, Max, Crunchyroll), tipo y género. Sin repeticiones dentro de la sesión. |
+| **Biblioteca** | Los "likes" se guardan con enlace directo a la plataforma donde verlos (vía JustWatch). |
+| **Barajas (decks)** | CRUD de colecciones curadas con tags y privacidad (privada / amigos / pública). Compartibles por URL. |
+| **Social** | Búsqueda de usuarios, solicitudes de amistad, enlaces de invitación. Actualización en **tiempo real**. |
+| **Retos** | Envía una película a un amigo; le aparece como overlay en su feed para aceptarla o rechazarla. |
+| **Ruleta multijugador** | Lobby en tiempo real con temporizador: varios usuarios hacen swipe a la vez y la app detecta los matches. |
+| **Test de afinidad** | Quiz de 5 preguntas que genera una baraja temporal personalizada. |
+| **Extras** | Tema claro/oscuro, español/inglés, diseño mobile-first con manifest web app. |
+
+## 🛠️ Stack
+
+- **Frontend:** Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS
+- **Backend (BaaS):** Supabase — PostgreSQL, Auth (JWT), Realtime (WebSockets), Storage
+- **APIs externas:** TMDB v3 (catálogo) y JustWatch GraphQL (enlaces de streaming, vía proxy server-side)
+- **Testing:** Jest + React Testing Library
+- **Despliegue:** Vercel
+
+## 🏗️ Arquitectura
+
+```
+src/
+├── app/            Rutas (App Router) + route handler /api/justwatch
+├── components/     UI: SwipeDeck, MovieCard, modales, layout, primitivas ui/
+├── context/        Estado global por dominio (Auth, User, Deck, Challenge, Lobby, i18n, Theme…)
+├── hooks/          useFriends (Realtime)
+├── services/       Cliente TMDB + resolución de enlaces de streaming
+├── lib/            Tipos de dominio, constantes, cliente Supabase singleton
+└── utils/supabase/ Clientes browser/server y refresco de sesión en middleware
+supabase/migrations/  Esquema SQL y políticas Row Level Security
+```
+
+Decisiones destacadas:
+
+- **Row Level Security** en todas las tablas: cada usuario solo lee/escribe lo suyo; las barajas "amigos" se validan contra la tabla `friendships`.
+- **Realtime en lugar de polling** para retos, amistades y lobby.
+- **Preferencias optimistas:** se leen primero de `localStorage` (UI instantánea) y Supabase actúa como fuente de verdad.
+- **Proxy server-side para JustWatch**, que no permite CORS desde el navegador, con fallback a la búsqueda de la plataforma.
+
+## 🚀 Ejecutar en local
+
+```bash
+git clone https://github.com/canudoJ/cinematch.git
+cd cinematch
+npm install
+cp .env.example .env.local   # rellena las claves de Supabase y TMDB
+npm run dev
+```
+
+Scripts: `npm run dev` · `npm run build` · `npm run lint` · `npm test`
+
+Para la base de datos, ejecuta los scripts de `supabase/migrations/` en el SQL Editor de tu proyecto Supabase.
+
+## 🗺️ Próximos pasos
+
+- Refactorizar el lobby de ruleta en hooks y subcomponentes
+- Tipado estricto (eliminar `any` restantes) y más cobertura de tests
+- Notificaciones push y estadísticas personales
+
 ---
 
-**Desarrollado por Javier Canudo Tavara usando Next.js, React y Supabase**
+Desarrollado por **Javier Canudo Tavara** · Datos de películas por [TMDB](https://www.themoviedb.org/) (este producto usa la API de TMDB pero no está respaldado ni certificado por TMDB).

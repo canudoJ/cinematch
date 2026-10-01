@@ -4,79 +4,75 @@ import React, { useState } from 'react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useUser } from '@/context/UserContext';
 import { Movie } from '@/lib/data';
-import { getWatchLink, fetchDetails } from '@/services/tmdb';
-
+import { getWatchLink } from '@/services/tmdb';
 
 import { useChallenge } from '@/context/ChallengeContext';
 import CloseButton from './ui/CloseButton';
+import MovieDetailsModal from './MovieDetailsModal';
+import { Heart, Film } from 'lucide-react';
 
 interface LibraryModalProps {
     onClose: () => void;
 }
 
 export default function LibraryModal({ onClose }: LibraryModalProps) {
-    const { t } = useLanguage();
+    const { t, language } = useLanguage();
     const { likedContent, removeLike, updateLike, platforms } = useUser();
-    const { sendChallenge } = useChallenge(); // Hook added
+    const { sendChallenge } = useChallenge();
 
     const [selectedItem, setSelectedItem] = useState<Movie | null>(null);
-    const [watchLink, setWatchLink] = useState<string | null>(null);
-    const [providerName, setProviderName] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [filterType, setFilterType] = useState<'all' | 'movie' | 'tv'>('all');
-    const [filterPlatform, setFilterPlatform] = useState<string>('all');
+    const [filterPlatforms, setFilterPlatforms] = useState<string[]>([]);
     const [enriching, setEnriching] = useState(false);
+    const [sortBy, setSortBy] = useState<'alpha' | 'liked' | 'year'>('alpha');
+    const [showFiltersDropdown, setShowFiltersDropdown] = useState(false);
 
-    // Auto-Enrich Missing Data (Updated for Multi-Provider)
+    // Auto-Enrich Missing Data
     React.useEffect(() => {
         const enrichContent = async () => {
             if (enriching || likedContent.length === 0) return;
-            
-            // Identificar películas que necesitan enriquecimiento
-            const moviesToEnrich = likedContent.filter(m => 
-                m.id && (
-                    !m.providers || 
-                    m.providers.length === 0 || 
-                    !m.providerName
-                )
+
+            const moviesToEnrich = likedContent.filter(m =>
+                m.id && (!m.providers || m.providers.length === 0 || !m.providerName)
             );
 
             if (moviesToEnrich.length === 0) return;
 
             setEnriching(true);
 
-            // Enriquecer en paralelo (limitado a 5 a la vez para no sobrecargar)
             const batchSize = 5;
             for (let i = 0; i < moviesToEnrich.length; i += batchSize) {
                 const batch = moviesToEnrich.slice(i, i + batchSize);
-                
+
                 await Promise.allSettled(
                     batch.map(async (movie) => {
                         try {
+                            const _region = typeof navigator !== 'undefined' ? (navigator.language.split('-')[1]?.toUpperCase() || 'ES') : 'ES';
                             const { link, providerName, providers } = await getWatchLink(
-                                movie.id, 
-                                movie.type || 'movie', 
-                                platforms
+                                movie.id,
+                                movie.type || 'movie',
+                                platforms,
+                                _region,
+                                movie.title
                             );
-                            
+
                             const updated = {
                                 ...movie,
                                 providerName: providerName || movie.providerName || undefined,
                                 watchLink: link || movie.watchLink || undefined,
                                 providers: providers && providers.length > 0 ? providers : (movie.providers || [])
                             };
-                            
-                            // Actualizar si hay nueva información
+
                             if ((providers && providers.length > 0) || providerName) {
                                 updateLike(updated);
                             }
-                        } catch (e) {
-                            console.error("Enrichment error for movie:", movie.id, e);
+                        } catch {
+                            // silencio
                         }
                     })
                 );
 
-                // Pequeña pausa entre lotes para no sobrecargar la API
                 if (i + batchSize < moviesToEnrich.length) {
                     await new Promise(resolve => setTimeout(resolve, 500));
                 }
@@ -85,334 +81,330 @@ export default function LibraryModal({ onClose }: LibraryModalProps) {
             setEnriching(false);
         };
 
-        // Ejecutar inmediatamente y también cuando cambien los likes o plataformas
         enrichContent();
     }, [likedContent.length, platforms, updateLike]);
+
+    const normalizePlatformName = (name: string): string => {
+        const n = name.toLowerCase().trim();
+        if (n.includes('hbo') || n.includes('max')) return 'hbo';
+        if (n.includes('netflix')) return 'netflix';
+        if (n.includes('disney')) return 'disney';
+        if (n.includes('amazon') || n.includes('prime')) return 'amazon';
+        if (n.includes('crunchyroll')) return 'crunchyroll';
+        return n;
+    };
+
+    const movieMatchesPlatformKey = (movie: Movie, platformKey: string): boolean => {
+        const nf = normalizePlatformName(platformKey);
+        const match = (pName: string) => {
+            const n = normalizePlatformName(pName);
+            return n === nf || n.includes(nf) || nf.includes(n);
+        };
+        if (movie.providers && movie.providers.length > 0) {
+            return movie.providers.some((p: { name: string; link: string }) => match(p.name));
+        }
+        if (movie.providerName) return match(movie.providerName);
+        return false;
+    };
+
+    const togglePlatform = (key: string) => {
+        setFilterPlatforms(prev => prev.includes(key) ? prev.filter(p => p !== key) : [...prev, key]);
+    };
+
+    const PLATFORM_CHIPS = [
+        { key: 'Netflix', label: 'Netflix' },
+        { key: 'Prime Video', label: 'Prime' },
+        { key: 'Disney+', label: 'Disney+' },
+        { key: 'HBO Max', label: 'HBO Max' },
+        { key: 'Crunchyroll', label: 'Crunchyroll' },
+    ];
 
     const filteredContent = likedContent.filter(movie => {
         const matchesType = filterType === 'all' || movie.type === filterType;
         const matchesSearch = !searchQuery || movie.title.toLowerCase().includes(searchQuery.toLowerCase());
-
-        let matchesPlatform = true;
-        if (filterPlatform !== 'all') {
-            const fName = filterPlatform.toLowerCase().trim();
-            
-            // Normalizar nombres comunes de plataformas para matching más flexible
-            const normalizePlatformName = (name: string): string => {
-                const normalized = name.toLowerCase().trim();
-                // Mapeos comunes
-                if (normalized.includes('hbo') || normalized.includes('max')) return 'hbo';
-                if (normalized.includes('netflix')) return 'netflix';
-                if (normalized.includes('disney') || normalized.includes('disney+')) return 'disney';
-                if (normalized.includes('amazon') || normalized.includes('prime')) return 'amazon';
-                if (normalized.includes('crunchyroll')) return 'crunchyroll';
-                return normalized;
-            };
-
-            const normalizedFilter = normalizePlatformName(fName);
-            const targetIsHBO = normalizedFilter === 'hbo';
-
-            // Prioridad 1: Check against the providers array (más completo)
-            if (movie.providers && movie.providers.length > 0) {
-                matchesPlatform = movie.providers.some((p: { name: string; link: string }) => {
-                    const pName = normalizePlatformName(p.name);
-                    if (targetIsHBO) {
-                        return pName === 'hbo' || pName.includes('hbo') || pName.includes('max');
-                    }
-                    return pName === normalizedFilter || pName.includes(normalizedFilter) || normalizedFilter.includes(pName);
-                });
-            } 
-            // Prioridad 2: Fallback to providerName (legacy single-provider)
-            else if (movie.providerName) {
-                const pName = normalizePlatformName(movie.providerName);
-                if (targetIsHBO) {
-                    matchesPlatform = pName === 'hbo' || pName.includes('hbo') || pName.includes('max');
-                } else {
-                    matchesPlatform = pName === normalizedFilter || pName.includes(normalizedFilter) || normalizedFilter.includes(pName);
-                }
-            } 
-            // Prioridad 3: Si no hay información de plataforma, no mostrar en filtro específico
-            else {
-                matchesPlatform = false;
-            }
-        }
-
+        const matchesPlatform = filterPlatforms.length === 0 || filterPlatforms.some(p => movieMatchesPlatformKey(movie, p));
         return matchesType && matchesSearch && matchesPlatform;
     });
 
-    const handleItemClick = async (movie: Movie) => {
-        setSelectedItem(movie);
+    const sortedContent = React.useMemo(() => {
+        const base = [...filteredContent];
 
-        // Obtener información de plataforma ANTES de mostrar el detalle
-        let targetLink = movie.watchLink;
-        let targetProvider = movie.providerName || null;
-
-        // Prioridad 1: Si hay providers en el objeto, usar el primero o el que coincida con el filtro
-        if (movie.providers && movie.providers.length > 0) {
-            if (filterPlatform !== 'all') {
-                const fName = filterPlatform.toLowerCase();
-                const targetIsHBO = fName.includes('hbo') || fName.includes('max');
-
-                const match = movie.providers.find((p: { name: string; link: string }) => {
-                    const pName = p.name.toLowerCase();
-                    if (targetIsHBO) return pName.includes('hbo') || pName.includes('max');
-                    return pName.includes(fName) || fName.includes(pName);
-                });
-
-                if (match) {
-                    targetLink = match.link;
-                    targetProvider = match.name;
-                } else {
-                    // Usar el primero disponible si no hay match con el filtro
-                    targetLink = movie.providers[0].link;
-                    targetProvider = movie.providers[0].name;
-                }
-            } else {
-                // Sin filtro, usar el primero disponible
-                targetLink = movie.providers[0].link;
-                targetProvider = movie.providers[0].name;
-            }
+        if (sortBy === 'alpha') {
+            base.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'es', { sensitivity: 'base' }));
+        } else if (sortBy === 'year') {
+            base.sort((a, b) => (b.year || 0) - (a.year || 0));
         }
 
-        // Prioridad 2: Si no hay enlace, obtener desde TMDB
-        if (!targetLink && movie.id) {
-            try {
-                const { link, providerName, providers } = await getWatchLink(movie.id, movie.type, platforms);
-                if (link) {
-                    targetLink = link;
-                    targetProvider = providerName || targetProvider;
-                } else if (providers && providers.length > 0) {
-                    // Usar el primer provider disponible
-                    targetLink = providers[0].link;
-                    targetProvider = providers[0].name;
-                }
-            } catch (error) {
-                console.error('Error obteniendo enlace de plataforma:', error);
-            }
-        }
-
-        // Prioridad 3: Si hay providerName pero no link, construir enlace de búsqueda en la plataforma
-        if (!targetLink && targetProvider) {
-            const query = encodeURIComponent(movie.title);
-            const provider = targetProvider.toLowerCase();
-
-            if (provider.includes('netflix')) {
-                targetLink = `https://www.netflix.com/search?q=${query}`;
-            } else if (provider.includes('disney')) {
-                targetLink = `https://www.disneyplus.com/search?q=${query}`;
-            } else if (provider.includes('amazon') || provider.includes('prime')) {
-                targetLink = `https://www.primevideo.com/search?q=${query}&i=instant-video`;
-            } else if (provider.includes('hbo') || provider.includes('max')) {
-                targetLink = `https://www.hbomax.com/es/es/search?q=${query}`;
-            } else if (provider.includes('crunchyroll')) {
-                targetLink = `https://www.crunchyroll.com/search?q=${query}`;
-            }
-        }
-
-        setWatchLink(targetLink || null);
-        setProviderName(targetProvider || null);
-    };
-
-    const closeDetail = () => {
-        setSelectedItem(null);
-        setWatchLink(null);
-        setProviderName(null);
-    };
+        return base;
+    }, [filteredContent, sortBy]);
 
     return (
-        <div style={{
-            position: 'fixed',
-            top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(0,0,0,0.85)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '20px'
-        }}>
-            <div className="animate-pop-in" style={{
-                background: 'var(--bg-darker)',
-                padding: '30px',
-                borderRadius: '24px',
-                width: '100%',
-                maxWidth: '600px',
-                border: '1px solid #333',
-                position: 'relative',
-                maxHeight: '90vh',
+        <>
+            {/* Modal principal de la videoteca */}
+            <div style={{
+                position: 'fixed',
+                top: 0, left: 0, right: 0, bottom: 0,
+                background: 'rgba(0,0,0,0.85)',
                 display: 'flex',
-                flexDirection: 'column'
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 1000,
+                padding: '20px'
             }}>
-                <CloseButton onClose={onClose} />
+                <div className="animate-pop-in modal-surface" style={{
+                    width: '100%',
+                    maxWidth: '600px',
+                    position: 'relative',
+                    background: 'var(--card)'
+                }}>
+                    <div style={{ position: 'absolute', top: 12, left: 12 }}>
+                        <CloseButton onClose={onClose} />
+                    </div>
 
-                {!selectedItem ? (
-                    <>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                            <h2 style={{ margin: 0 }}>{t.library || 'My Library'} ❤️</h2>
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '20px', paddingTop: '32px' }}>
+                        <div style={{
+                            borderRadius: '999px',
+                            border: '2px solid var(--secondary)',
+                            padding: '8px 16px',
+                            boxShadow: '0 0 18px rgba(0,229,255,0.35)',
+                        }}>
+                            <h2 className="heading-lg" style={{ margin: 0, textAlign: 'center' }}>
+                                {t.library || 'My Library'}{' '}
+                                <Heart
+                                    size={24}
+                                    className="inline-block ml-1 -mt-0.5 text-[var(--primary)]"
+                                    strokeWidth={2}
+                                    aria-hidden
+                                />
+                            </h2>
                         </div>
+                    </div>
 
-                        {/* Filters */}
-                        <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
-                            <input
-                                type="text"
-                                placeholder="Search..."
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
+                    {/* Filters */}
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', alignItems: 'stretch', position: 'relative' }}>
+                        <input
+                            type="text"
+                            placeholder={`${t.search}...`}
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            style={{
+                                flex: 1,
+                                minWidth: '120px',
+                                padding: '10px',
+                                borderRadius: '8px',
+                                border: '1px solid var(--secondary)',
+                                background: 'var(--card)',
+                                color: 'var(--foreground)'
+                            }}
+                        />
+                        <div style={{ position: 'relative' }}>
+                            <button
+                                type="button"
+                                onClick={() => setShowFiltersDropdown(!showFiltersDropdown)}
                                 style={{
-                                    flex: 1, minWidth: '120px',
-                                    padding: '10px', borderRadius: '8px', border: '1px solid #333', background: '#222', color: 'white'
-                                }}
-                            />
-                            <select
-                                value={filterType}
-                                onChange={(e) => setFilterType(e.target.value as any)}
-                                style={{
-                                    padding: '10px', borderRadius: '8px', border: '1px solid #333', background: '#222', color: 'white'
+                                    padding: '10px 16px',
+                                    borderRadius: '8px',
+                                    border: '1px solid var(--secondary)',
+                                    background: 'var(--card)',
+                                    color: 'var(--foreground)',
+                                    cursor: 'pointer',
+                                    whiteSpace: 'nowrap',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    minWidth: '120px',
+                                    justifyContent: 'space-between',
+                                    touchAction: 'manipulation'
                                 }}
                             >
-                                <option value="all">All Types</option>
-                                <option value="movie">Movies</option>
-                                <option value="tv">TV Shows</option>
-                            </select>
-                            <select
-                                value={filterPlatform}
-                                onChange={(e) => setFilterPlatform(e.target.value)}
-                                style={{
-                                    padding: '10px', borderRadius: '8px', border: '1px solid #333', background: '#222', color: 'white'
-                                }}
-                            >
-                                <option value="all">All Platforms</option>
-                                <option value="Netflix">Netflix</option>
-                                <option value="Prime Video">Prime Video</option>
-                                <option value="Disney+">Disney+</option>
-                                <option value="HBO Max">HBO Max</option>
-                                <option value="Crunchyroll">Crunchyroll</option>
-                            </select>
-                        </div>
+                                <span>{t.filters}</span>
+                                <span style={{ fontSize: '0.8rem' }}>{showFiltersDropdown ? '▲' : '▼'}</span>
+                            </button>
 
-                        {filteredContent.length === 0 ? (
-                            <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
-                                <p>No matching items found.</p>
-                            </div>
-                        ) : (
-                            <div style={{
-                                display: 'grid',
-                                gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))',
-                                gap: '15px',
-                                overflowY: 'auto',
-                                paddingRight: '5px'
-                            }}>
-                                {filteredContent.map((movie: Movie) => (
-                                    <div
-                                        key={movie.id}
-                                        onClick={() => handleItemClick(movie)}
-                                        style={{ position: 'relative', cursor: 'pointer', borderRadius: '8px', overflow: 'hidden' }}
-                                    >
+                            {showFiltersDropdown && (
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        top: '100%',
+                                        right: 0,
+                                        marginTop: '8px',
+                                        background: 'var(--card)',
+                                        border: '1px solid var(--secondary)',
+                                        borderRadius: '8px',
+                                        padding: '12px',
+                                        minWidth: '200px',
+                                        zIndex: 1000,
+                                        boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
+                                    }}
+                                    onClick={(e) => e.stopPropagation()}
+                                >
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.85rem', color: 'var(--secondary)', fontWeight: 600 }}>
+                                            {t.platform}
+                                        </label>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                            {PLATFORM_CHIPS.map(({ key, label }) => {
+                                                const active = filterPlatforms.includes(key);
+                                                return (
+                                                    <button
+                                                        key={key}
+                                                        onClick={() => togglePlatform(key)}
+                                                        style={{
+                                                            padding: '5px 12px',
+                                                            borderRadius: '20px',
+                                                            border: `1px solid ${active ? 'var(--secondary)' : 'var(--border)'}`,
+                                                            background: active ? 'rgba(0,229,255,0.12)' : 'var(--surface)',
+                                                            color: active ? 'var(--secondary)' : 'var(--muted-foreground)',
+                                                            fontSize: '0.8rem',
+                                                            fontWeight: active ? 700 : 400,
+                                                            cursor: 'pointer',
+                                                            transition: 'all 0.15s',
+                                                        }}
+                                                    >
+                                                        {label}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                        {filterPlatforms.length > 0 && (
+                                            <button
+                                                onClick={() => setFilterPlatforms([])}
+                                                style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--muted-foreground)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                                            >
+                                                ✕ {language === 'en' ? 'Clear' : 'Limpiar'}
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--secondary)', fontWeight: 600 }}>
+                                            {t.selectContent}
+                                        </label>
+                                        <select
+                                            value={filterType}
+                                            onChange={(e) => setFilterType(e.target.value as any)}
+                                            style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--foreground)', fontSize: '0.9rem' }}
+                                        >
+                                            <option value="all">{t.all}</option>
+                                            <option value="movie">{t.movies}</option>
+                                            <option value="tv">{t.tvShows}</option>
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--secondary)', fontWeight: 600 }}>
+                                            {t.sortBy}
+                                        </label>
+                                        <select
+                                            value={sortBy}
+                                            onChange={(e) => setSortBy(e.target.value as any)}
+                                            style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--foreground)', fontSize: '0.9rem' }}
+                                        >
+                                            <option value="alpha">{t.sortAlpha}</option>
+                                            <option value="liked">{t.sortLiked}</option>
+                                            <option value="year">{t.sortYear}</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {showFiltersDropdown && (
+                        <div
+                            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }}
+                            onClick={() => setShowFiltersDropdown(false)}
+                        />
+                    )}
+
+                    {filteredContent.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '40px', color: 'var(--muted-foreground)' }}>
+                            <Film size={48} className="mx-auto mb-2.5 text-[var(--muted-foreground)]" aria-hidden />
+                            {likedContent.length === 0 ? (
+                                <>
+                                    <p style={{ marginBottom: '5px', fontWeight: 600 }}>
+                                        {t.noLikesYet || 'Aún no te ha gustado nada'}
+                                    </p>
+                                    <p style={{ fontSize: '0.9rem', color: 'var(--muted-foreground)' }}>
+                                        {t.startSwiping}
+                                    </p>
+                                </>
+                            ) : (
+                                <>
+                                    <p style={{ marginBottom: '5px', fontWeight: 600 }}>{t.noMatches}</p>
+                                    <p style={{ fontSize: '0.9rem', color: 'var(--muted-foreground)' }}>{t.tryOtherSearch}</p>
+                                </>
+                            )}
+                        </div>
+                    ) : (
+                        <div style={{
+                            flex: 1,
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            alignContent: 'flex-start',
+                            gap: '16px',
+                            overflowY: 'auto',
+                            paddingRight: '5px'
+                        }}>
+                            {sortedContent.map((movie: Movie) => (
+                                <div
+                                    key={movie.id}
+                                    onClick={() => setSelectedItem(movie)}
+                                    className="library-card"
+                                    style={{ cursor: 'pointer', flex: '0 0 calc((100% - 16px) / 2)' }}
+                                >
+                                    <div className="library-card-inner">
                                         <img
                                             src={movie.image}
                                             alt={movie.title}
-                                            style={{ width: '100%', aspectRatio: '2/3', objectFit: 'cover' }}
+                                            style={{
+                                                position: 'absolute',
+                                                top: 0,
+                                                left: 0,
+                                                width: '100%',
+                                                height: '100%',
+                                                objectFit: 'cover'
+                                            }}
                                         />
-                                        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(transparent, black)', padding: '5px', fontSize: '0.8rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        <div style={{
+                                            position: 'absolute',
+                                            bottom: 0,
+                                            left: 0,
+                                            right: 0,
+                                            background: 'linear-gradient(transparent, #000)',
+                                            padding: '6px 8px 10px',
+                                            fontSize: '0.85rem',
+                                            lineHeight: 1.25,
+                                            color: '#ffffff',
+                                            textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+                                            display: '-webkit-box',
+                                            WebkitLineClamp: 2,
+                                            WebkitBoxOrient: 'vertical',
+                                            overflow: 'hidden'
+                                        }}>
                                             {movie.title}
                                         </div>
                                     </div>
-                                ))}
-                            </div>
-                        )}
-                    </>
-                ) : (
-                    <>
-                        <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-                            <img
-                                src={selectedItem.image}
-                                alt={selectedItem.title}
-                                style={{ width: '120px', borderRadius: '8px', boxShadow: '0 4px 15px rgba(0,0,0,0.5)' }}
-                            />
-                            <h2 style={{ fontSize: '1.5rem', margin: '10px 0' }}>{selectedItem.title}</h2>
-                            <p style={{ color: '#888', fontSize: '0.9rem' }}>{selectedItem.year} • ⭐ {selectedItem.rating}</p>
+                                </div>
+                            ))}
                         </div>
-
-                        <p style={{ color: '#ddd', fontSize: '0.9rem', lineHeight: '1.5', flex: 1, overflowY: 'auto' }}>
-                            {selectedItem.synopsis || selectedItem.synopsis_es}
-                        </p>
-
-                        <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            {watchLink && providerName ? (
-                                <a
-                                    href={watchLink}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={{
-                                        background: 'var(--accent-green)',
-                                        color: 'black',
-                                        padding: '15px',
-                                        borderRadius: '12px',
-                                        textAlign: 'center',
-                                        textDecoration: 'none',
-                                        fontWeight: 'bold',
-                                        display: 'block'
-                                    }}
-                                >
-                                    Ver en {providerName} ↗
-                                </a>
-                            ) : watchLink ? (
-                                <a
-                                    href={watchLink}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={{
-                                        background: 'var(--accent-green)',
-                                        color: 'black',
-                                        padding: '15px',
-                                        borderRadius: '12px',
-                                        textAlign: 'center',
-                                        textDecoration: 'none',
-                                        fontWeight: 'bold',
-                                        display: 'block'
-                                    }}
-                                >
-                                    Ver en Plataforma ↗
-                                </a>
-                            ) : (
-                                <a
-                                    href={`https://www.google.com/search?q=ver+${encodeURIComponent(selectedItem.title)}+online`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={{
-                                        background: '#666',
-                                        color: 'white',
-                                        padding: '15px',
-                                        borderRadius: '12px',
-                                        textAlign: 'center',
-                                        textDecoration: 'none',
-                                        fontWeight: 'bold',
-                                        display: 'block',
-                                        opacity: 0.7
-                                    }}
-                                >
-                                    Buscar en Google (último recurso) ↗
-                                </a>
-                            )}
-
-                            <button
-                                onClick={() => {
-                                    removeLike(selectedItem.id);
-                                    closeDetail();
-                                }}
-                                style={{ flex: 1, padding: '15px', borderRadius: '15px', background: 'rgba(255, 75, 75, 0.1)', color: 'var(--accent-red)', border: 'none', cursor: 'pointer' }}
-                            >
-                                Eliminar 💔
-                            </button>
-                            <button
-                                onClick={closeDetail}
-                                style={{ marginTop: '10px', width: '100%', padding: '12px', borderRadius: '12px', background: '#333', color: 'white', border: 'none', cursor: 'pointer' }}
-                            >
-                                Volver
-                            </button>
-                        </div>
-                    </>
-                )}
+                    )}
+                </div>
             </div>
-        </div>
+
+            {/* Modal de detalles completo — se monta encima del modal de librería */}
+            {selectedItem && (
+                <MovieDetailsModal
+                    movie={selectedItem}
+                    onClose={() => setSelectedItem(null)}
+                    skipSave={true}
+                    onDislike={() => {
+                        removeLike(selectedItem.id);
+                        setSelectedItem(null);
+                    }}
+                    dislikeLabel={language === 'es' ? 'Eliminar de mi videoteca' : 'Remove from library'}
+                />
+            )}
+        </>
     );
 }

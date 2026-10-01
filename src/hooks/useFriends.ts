@@ -19,14 +19,52 @@ export function useFriends() {
     const [loading, setLoading] = useState(false);
     const [searchLoading, setSearchLoading] = useState(false);
     const [requestsLoading, setRequestsLoading] = useState(false);
+    const [sentRequests, setSentRequests] = useState<Set<string>>(new Set());
 
+    // ---------------------------------------------------------------------------
+    // Carga inicial + Supabase Realtime
+    // ---------------------------------------------------------------------------
     useEffect(() => {
-        if (user) {
-            fetchFriends();
-            fetchRequests();
+        if (!user) {
+            setFriends([]);
+            setRequests([]);
+            return;
         }
+
+        fetchFriends();
+        fetchRequests();
+
+        // Suscripción Realtime a la tabla friendships donde el usuario es parte
+        const channel = supabase
+            .channel(`friendships-${user.id}`)
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public',
+                table: 'friendships',
+                filter: `requester_id=eq.${user.id}`
+            }, () => {
+                fetchFriends();
+                fetchRequests();
+            })
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public',
+                table: 'friendships',
+                filter: `receiver_id=eq.${user.id}`
+            }, () => {
+                fetchFriends();
+                fetchRequests();
+            })
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
     }, [user]);
 
+    // ---------------------------------------------------------------------------
+    // Fetch amigos aceptados
+    // ---------------------------------------------------------------------------
     const fetchFriends = async () => {
         if (!user) return;
         setLoading(true);
@@ -49,11 +87,10 @@ export function useFriends() {
 
             if (data) {
                 const mappedFriends = data.map((f: any) => {
-                    // If I am requester, friend is receiver
                     const friendProfile = f.requester_id === user.id ? f.receiver : f.requester;
                     return {
                         ...friendProfile,
-                        friendshipId: f.id // Include friendship ID for removal
+                        friendshipId: f.id
                     };
                 });
                 setFriends(mappedFriends);
@@ -65,12 +102,14 @@ export function useFriends() {
         }
     };
 
+    // ---------------------------------------------------------------------------
+    // Fetch solicitudes de amistad pendientes (el usuario es receiver)
+    // ---------------------------------------------------------------------------
     const fetchRequests = async () => {
         if (!user) return;
         setRequestsLoading(true);
 
         try {
-            // Fetch pending requests where I am the receiver
             const { data, error } = await supabase
                 .from('friendships')
                 .select(`
@@ -103,6 +142,9 @@ export function useFriends() {
         }
     };
 
+    // ---------------------------------------------------------------------------
+    // Buscar usuarios por username
+    // ---------------------------------------------------------------------------
     const searchUsers = useCallback(async (query: string) => {
         if (!user || !query.trim() || query.length < 2) {
             setSearchResults([]);
@@ -113,21 +155,20 @@ export function useFriends() {
         try {
             const { data, error } = await supabase
                 .from('profiles')
-                .select('id, username, avatar_url, level')
+                .select('id, username, avatar_url, level, is_premium')
                 .ilike('username', `%${query}%`)
-                .neq('id', user.id) // Exclude current user
+                .neq('id', user.id)
                 .limit(20);
 
             if (error) throw error;
 
             if (data) {
-                // Filter out users who are already friends or have pending requests
                 const friendIds = new Set(friends.map(f => f.id));
                 const requestIds = new Set(requests.map(r => r.sender.id));
 
-                const filtered = data.filter((profile: Profile) => 
-                    !friendIds.has(profile.id) && !requestIds.has(profile.id)
-                );
+                const filtered = data
+                    .map((p: any) => ({ ...p, is_premium: p.is_premium ?? false }))
+                    .filter((p: Profile) => !friendIds.has(p.id) && !requestIds.has(p.id));
 
                 setSearchResults(filtered);
             }
@@ -139,16 +180,17 @@ export function useFriends() {
         }
     }, [user, friends, requests]);
 
+    // ---------------------------------------------------------------------------
+    // Enviar solicitud de amistad
+    // ---------------------------------------------------------------------------
     const sendRequest = async (friendIdOrUsername: string) => {
         if (!user) throw new Error('Usuario no autenticado');
 
         let friendId: string;
 
-        // Check if it's a UUID (ID) or username
         if (friendIdOrUsername.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
             friendId = friendIdOrUsername;
         } else {
-            // It's a username, find the user ID
             const { data: profile, error: searchError } = await supabase
                 .from('profiles')
                 .select('id')
@@ -159,10 +201,8 @@ export function useFriends() {
             friendId = profile.id;
         }
 
-        // Validate: don't send request to yourself
         if (friendId === user.id) throw new Error('No puedes enviarte una solicitud a ti mismo');
 
-        // Check if friendship already exists
         const { data: existing } = await supabase
             .from('friendships')
             .select('id, status')
@@ -174,7 +214,6 @@ export function useFriends() {
             if (existing.status === 'pending') throw new Error('Ya existe una solicitud pendiente');
         }
 
-        // Create friendship request
         const { error } = await supabase
             .from('friendships')
             .insert({
@@ -185,10 +224,13 @@ export function useFriends() {
 
         if (error) throw error;
 
-        // Refresh requests list
-        await fetchRequests();
+        // Feedback optimista inmediato (el Realtime también actualizará)
+        setSentRequests(prev => new Set(prev).add(friendId));
     };
 
+    // ---------------------------------------------------------------------------
+    // Aceptar solicitud
+    // ---------------------------------------------------------------------------
     const acceptRequest = async (friendshipId: string) => {
         if (!user) return;
 
@@ -197,18 +239,19 @@ export function useFriends() {
                 .from('friendships')
                 .update({ status: 'accepted' })
                 .eq('id', friendshipId)
-                .eq('receiver_id', user.id); // Ensure user is the receiver
+                .eq('receiver_id', user.id);
 
             if (error) throw error;
-
-            // Refresh both friends and requests
-            await Promise.all([fetchFriends(), fetchRequests()]);
+            // Realtime actualizará automáticamente friends y requests
         } catch (error) {
             console.error('Error accepting request:', error);
             throw error;
         }
     };
 
+    // ---------------------------------------------------------------------------
+    // Rechazar solicitud
+    // ---------------------------------------------------------------------------
     const rejectRequest = async (friendshipId: string) => {
         if (!user) return;
 
@@ -217,18 +260,19 @@ export function useFriends() {
                 .from('friendships')
                 .update({ status: 'declined' })
                 .eq('id', friendshipId)
-                .eq('receiver_id', user.id); // Ensure user is the receiver
+                .eq('receiver_id', user.id);
 
             if (error) throw error;
-
-            // Refresh requests list
-            await fetchRequests();
+            // Realtime actualizará automáticamente
         } catch (error) {
             console.error('Error rejecting request:', error);
             throw error;
         }
     };
 
+    // ---------------------------------------------------------------------------
+    // Cancelar solicitud enviada
+    // ---------------------------------------------------------------------------
     const cancelRequest = async (friendshipId: string) => {
         if (!user) return;
 
@@ -237,18 +281,19 @@ export function useFriends() {
                 .from('friendships')
                 .delete()
                 .eq('id', friendshipId)
-                .eq('requester_id', user.id); // Ensure user is the requester
+                .eq('requester_id', user.id);
 
             if (error) throw error;
-
-            // Refresh requests list
-            await fetchRequests();
+            // Realtime actualizará automáticamente
         } catch (error) {
             console.error('Error canceling request:', error);
             throw error;
         }
     };
 
+    // ---------------------------------------------------------------------------
+    // Eliminar amigo
+    // ---------------------------------------------------------------------------
     const removeFriend = async (friendshipId: string) => {
         if (!user) return;
 
@@ -260,9 +305,7 @@ export function useFriends() {
                 .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`);
 
             if (error) throw error;
-
-            // Refresh friends list
-            await fetchFriends();
+            // Realtime actualizará automáticamente
         } catch (error) {
             console.error('Error removing friend:', error);
             throw error;
@@ -276,6 +319,7 @@ export function useFriends() {
         loading,
         searchLoading,
         requestsLoading,
+        sentRequests,
         sendRequest,
         fetchFriends,
         fetchRequests,

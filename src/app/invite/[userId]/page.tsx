@@ -19,10 +19,23 @@ export default function InvitePage() {
     const [status, setStatus] = useState<'none' | 'already_friends' | 'request_exists' | 'sent' | 'error'>('none');
     const [errorMessage, setErrorMessage] = useState('');
 
-    const userId = params.userId as string;
+    // Extraer userId de forma segura - evitar enumeración de params
+    // useParams() devuelve un objeto sincrónico en client components
+    const userId = React.useMemo(() => {
+        try {
+            if (!params) return null;
+            // Acceder directamente a la propiedad sin enumerar el objeto
+            const id = 'userId' in params ? params.userId : null;
+            if (!id) return null;
+            return Array.isArray(id) ? id[0] : String(id);
+        } catch (error) {
+            console.error('Error extracting userId from params:', error);
+            return null;
+        }
+    }, [params]);
 
     useEffect(() => {
-        if (!authLoading) {
+        if (!authLoading && userId) {
             if (!user) {
                 // Redirect to login if not authenticated
                 router.replace(`/auth/login?redirect=/invite/${userId}`);
@@ -31,7 +44,7 @@ export default function InvitePage() {
 
             loadInviteData();
         }
-    }, [user, authLoading, userId]);
+    }, [user, authLoading, userId, router]);
 
     const loadInviteData = async () => {
         if (!user || !userId) return;
@@ -41,7 +54,7 @@ export default function InvitePage() {
             // Fetch invited user profile
             const { data: profile, error } = await supabase
                 .from('profiles')
-                .select('id, username, avatar_url, level')
+                .select('id, username, avatar_url, level, is_premium')
                 .eq('id', userId)
                 .single();
 
@@ -52,7 +65,7 @@ export default function InvitePage() {
                 return;
             }
 
-            setInvitedUser(profile);
+            setInvitedUser({ ...profile, is_premium: (profile as any).is_premium ?? false } as Profile);
 
             // Check if already friends
             const { data: friendship } = await supabase
@@ -100,9 +113,9 @@ export default function InvitePage() {
 
     if (authLoading || loading) {
         return (
-            <div className="min-h-screen bg-black flex flex-col items-center justify-center z-50">
-                <Loader2 className="animate-spin text-[var(--accent-green-alt)] mb-4" size={48} />
-                <p className="text-gray-500 animate-pulse">Cargando...</p>
+            <div className="min-h-screen bg-[var(--background)] text-[var(--foreground)] flex flex-col items-center justify-center z-50">
+                <Loader2 className="animate-spin text-[var(--secondary)] mb-4" size={48} />
+                <p className="text-[var(--muted-foreground)] animate-pulse">Cargando...</p>
             </div>
         );
     }
@@ -112,11 +125,11 @@ export default function InvitePage() {
     }
 
     return (
-        <main className="min-h-screen bg-black text-white p-6 pb-24 pt-32 relative z-10 overflow-y-auto">
+        <main className="min-h-screen bg-[var(--background)] text-[var(--foreground)] p-6 pb-24 pt-32 relative z-10 overflow-y-auto">
             <BackButton href="/profile" className="absolute top-6 left-6" />
 
             {/* Fondo ambiental verde */}
-            <div className="fixed top-[-20%] left-[-20%] w-[500px] h-[500px] bg-[var(--accent-green-alt)] opacity-5 blur-[120px] pointer-events-none rounded-full" />
+            <div className="fixed top-[-20%] left-[-20%] w-[500px] h-[500px] bg-[var(--secondary)] opacity-5 blur-[120px] pointer-events-none rounded-full" />
 
             <div className="max-w-xl mx-auto relative z-10 animate-fade-in">
                 <header className="flex items-center mb-10 relative z-20">
@@ -124,53 +137,53 @@ export default function InvitePage() {
                 </header>
 
                 {status === 'error' ? (
-                    <div className="bg-[var(--bg-dark)]/80 p-8 rounded-3xl border border-red-500/30 text-center">
-                        <XCircle className="mx-auto mb-4 text-red-500" size={48} />
-                        <h2 className="text-xl font-bold mb-2">Error</h2>
-                        <p className="text-gray-400 mb-6">{errorMessage}</p>
+                    <div className="bg-[var(--card)]/80 p-8 rounded-3xl border border-[var(--destructive)]/30 text-center">
+                        <XCircle className="mx-auto mb-4 text-[var(--destructive)]" size={48} />
+                        <h2 className="text-xl font-bold mb-2 text-[var(--foreground)]">Error</h2>
+                        <p className="text-[var(--muted-foreground)] mb-6">{errorMessage}</p>
                         <button
                             onClick={() => router.push('/profile')}
-                            className="bg-[var(--accent-green-alt)] text-black px-6 py-3 rounded-xl font-bold hover:opacity-90 transition-opacity"
+                            className="bg-[var(--secondary)] text-[var(--background)] px-6 py-3 rounded-xl font-bold hover:opacity-90 transition-opacity"
                         >
                             Volver al Perfil
                         </button>
                     </div>
                 ) : invitedUser ? (
-                    <div className="bg-[var(--bg-dark)]/80 p-8 rounded-3xl border border-gray-800 text-center">
+                    <div className="bg-[var(--card)]/80 p-8 rounded-3xl border border-[var(--border)] text-center">
                         {/* Avatar */}
                         <div className="flex justify-center mb-6">
-                            <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-[var(--accent-green-alt)] bg-[var(--bg-dark)] shadow-[0_0_40px_rgba(0,255,157,0.3)] flex items-center justify-center">
+                            <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-[var(--secondary)] bg-[var(--card)] shadow-[var(--shadow-neon-cyan)] flex items-center justify-center">
                                 {invitedUser.avatar_url ? (
                                     <img src={invitedUser.avatar_url} alt={invitedUser.username || 'Usuario'} className="w-full h-full object-cover" />
                                 ) : (
-                                    <User size={48} className="text-gray-700" />
+                                    <User size={48} className="text-[var(--muted-foreground)]" />
                                 )}
                             </div>
                         </div>
 
                         {/* Username */}
-                        <h2 className="text-2xl font-black mb-2">{invitedUser.username || 'Usuario sin nombre'}</h2>
-                        <p className="text-gray-400 mb-8">Nivel {invitedUser.level || 1}</p>
+                        <h2 className="text-2xl font-black mb-2 text-[var(--foreground)]">{invitedUser.username || 'Usuario sin nombre'}</h2>
+                        <p className="text-[var(--muted-foreground)] mb-8">Nivel {invitedUser.level || 1}</p>
 
                         {/* Status Messages */}
                         {status === 'already_friends' && (
-                            <div className="mb-6 p-4 bg-green-500/10 border border-green-500/30 rounded-xl">
-                                <CheckCircle className="mx-auto mb-2 text-green-500" size={32} />
-                                <p className="text-green-400 font-bold">Ya son amigos</p>
+                            <div className="mb-6 p-4 bg-[var(--secondary)]/10 border border-[var(--secondary)]/30 rounded-xl">
+                                <CheckCircle className="mx-auto mb-2 text-[var(--secondary)]" size={32} />
+                                <p className="text-[var(--secondary)] font-bold">Ya son amigos</p>
                             </div>
                         )}
 
                         {status === 'request_exists' && (
-                            <div className="mb-6 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-xl">
-                                <Loader2 className="mx-auto mb-2 text-yellow-500 animate-spin" size={32} />
-                                <p className="text-yellow-400 font-bold">Solicitud pendiente</p>
+                            <div className="mb-6 p-4 bg-[var(--muted)]/50 border border-[var(--border)] rounded-xl">
+                                <Loader2 className="mx-auto mb-2 text-[var(--muted-foreground)] animate-spin" size={32} />
+                                <p className="text-[var(--muted-foreground)] font-bold">Solicitud pendiente</p>
                             </div>
                         )}
 
                         {status === 'sent' && (
-                            <div className="mb-6 p-4 bg-[var(--accent-green-alt)]/10 border border-[var(--accent-green-alt)]/30 rounded-xl">
-                                <CheckCircle className="mx-auto mb-2 text-[var(--accent-green-alt)]" size={32} />
-                                <p className="text-[var(--accent-green-alt)] font-bold">¡Solicitud enviada!</p>
+                            <div className="mb-6 p-4 bg-[var(--secondary)]/10 border border-[var(--secondary)]/30 rounded-xl">
+                                <CheckCircle className="mx-auto mb-2 text-[var(--secondary)]" size={32} />
+                                <p className="text-[var(--secondary)] font-bold">¡Solicitud enviada!</p>
                             </div>
                         )}
 
@@ -179,7 +192,7 @@ export default function InvitePage() {
                             <button
                                 onClick={handleSendRequest}
                                 disabled={sending}
-                                className="w-full bg-[var(--accent-green-alt)] text-black px-6 py-4 rounded-xl font-bold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                className="w-full bg-[var(--secondary)] text-[var(--background)] px-6 py-4 rounded-xl font-bold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                             >
                                 {sending ? (
                                     <>
@@ -198,19 +211,19 @@ export default function InvitePage() {
                         {status !== 'none' && (
                             <button
                                 onClick={() => router.push('/profile')}
-                                className="w-full bg-[var(--bg-darker)] border border-gray-700 text-white px-6 py-4 rounded-xl font-bold hover:border-[var(--accent-green-alt)] transition-colors"
+                                className="w-full bg-[var(--background)] border-2 border-[var(--border)] text-[var(--foreground)] px-6 py-4 rounded-xl font-bold hover:border-[var(--secondary)] transition-colors"
                             >
                                 Volver al Perfil
                             </button>
                         )}
 
-                        {errorMessage && status !== 'error' && (
-                            <p className="mt-4 text-red-400 text-sm">{errorMessage}</p>
+                        {errorMessage && (
+                            <p className="mt-4 text-[var(--destructive)] text-sm">{errorMessage}</p>
                         )}
                     </div>
                 ) : (
-                    <div className="bg-[var(--bg-dark)]/80 p-8 rounded-3xl border border-gray-800 text-center">
-                        <p className="text-gray-400">Cargando información del usuario...</p>
+                    <div className="bg-[var(--card)]/80 p-8 rounded-3xl border border-[var(--border)] text-center">
+                        <p className="text-[var(--muted-foreground)]">Cargando información del usuario...</p>
                     </div>
                 )}
             </div>

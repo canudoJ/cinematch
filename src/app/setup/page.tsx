@@ -1,68 +1,90 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useUser, ContentType } from '@/context/UserContext';
 import { useRouter } from 'next/navigation';
 import { useLanguage } from '@/context/LanguageContext';
 
-import { PROVIDERS } from '@/lib/constants';
+import { PROVIDERS, TMDB_GENRES } from '@/lib/constants';
+import { useSwipeSession } from '@/context/SwipeSessionContext';
 
 import BackButton from '@/components/ui/BackButton';
+import { Button } from '@/components/ui/Button';
+import { Film, Tv } from 'lucide-react';
 
 export default function SetupPage() {
-    const { updatePlatforms, toggleContentType, contentTypes } = useUser();
-    const { language } = useLanguage();
+    const { platforms, updatePlatforms, toggleContentType, contentTypes, preferredGenres, updatePreferredGenres } = useUser();
+    const { language, t } = useLanguage();
     const router = useRouter();
+    const { resetSession } = useSwipeSession();
 
-    // Local state for UI before saving
-    const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+    // Local state for UI — initialized from context (may arrive async from Supabase)
+    const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(platforms);
+    const [selectedGenres, setSelectedGenres] = useState<string[]>(preferredGenres);
+
+    // Sync once context finishes loading preferences from Supabase
+    useEffect(() => {
+        setSelectedPlatforms(platforms);
+    }, [platforms]);
+
+    useEffect(() => {
+        setSelectedGenres(preferredGenres);
+    }, [preferredGenres]);
 
     const toggleProvider = (id: string) => {
-        if (selectedPlatforms.includes(id)) {
-            setSelectedPlatforms(selectedPlatforms.filter(p => p !== id));
-        } else {
-            setSelectedPlatforms([...selectedPlatforms, id]);
-        }
+        setSelectedPlatforms(prev =>
+            prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]
+        );
+    };
+
+    const toggleGenre = (genreId: string) => {
+        setSelectedGenres(prev =>
+            prev.includes(genreId) ? prev.filter(g => g !== genreId) : [...prev, genreId]
+        );
     };
 
     const handleContinue = () => {
         updatePlatforms(selectedPlatforms);
+        updatePreferredGenres(selectedGenres);
+
+        // Resetear la sesión de swipe para que el próximo mazo
+        // se genere con los nuevos filtros.
+        resetSession();
+
         router.push('/');
     };
 
     return (
-        <main className="container" style={{ justifyContent: 'center', alignItems: 'center', minHeight: '100vh', padding: '20px', position: 'relative' }}>
-            <BackButton className="absolute top-5 left-5" />
-            <div className="animate-fade-in" style={{ width: '100%', textAlign: 'center', maxWidth: '600px' }}>
-                <h1 style={{ marginBottom: '10px', fontWeight: 800, fontSize: '2rem' }}>
-                    {language === 'es' ? 'Tus Plataformas' : 'Your Platforms'}
-                </h1>
-                <p style={{ color: '#888', marginBottom: '30px' }}>
-                    {language === 'es' ? 'Selecciona todo lo que te apetezca:' : 'Select everything you want:'}
-                </p>
+        <main className="min-h-screen flex flex-col bg-[var(--background)] text-[var(--foreground)]">
+            {/* Contenedor scrollable que llega ópticamente hasta el borde del BottomNav fijo */}
+            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+                <div className="relative min-h-full flex flex-col items-center p-6 pb-28">
+                    <div className="w-full max-w-[600px] animate-fade-in mt-4">
+                        {/* Header: botón salir fijo a la izquierda y título centrado en la página */}
+                        <div className="relative flex items-center justify-center">
+                            <BackButton href="/" className="absolute left-0 z-10" />
+                            <h1 className="mb-2 text-2xl sm:text-3xl font-extrabold text-[var(--foreground)] text-center leading-tight px-12">
+                                {t.yourPlatforms}
+                            </h1>
+                        </div>
+                        <p className="text-[var(--muted-foreground)] mb-8 text-center">
+                            {t.selectEverything}
+                        </p>
 
                 {/* Platforms Grid */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '15px', marginBottom: '40px' }}>
+                <div className="grid grid-cols-2 gap-4 mb-10">
                     {PROVIDERS.map(p => {
                         const isSelected = selectedPlatforms.includes(p.id);
                         return (
                             <button
                                 key={p.id}
+                                type="button"
                                 onClick={() => toggleProvider(p.id)}
+                                className="flex items-center justify-center h-20 rounded-2xl font-bold text-base transition-all border-2 text-white"
                                 style={{
-                                    background: isSelected ? p.color : '#1A1A1A',
-                                    border: isSelected ? `2px solid ${p.color}` : '2px solid #333',
-                                    padding: '10px',
-                                    borderRadius: '16px',
-                                    color: 'white',
-                                    fontWeight: 'bold',
-                                    fontSize: '1rem',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    height: '80px',
-                                    boxShadow: isSelected ? `0 0 20px ${p.color}40` : 'none',
-                                    transition: 'all 0.2s'
+                                    background: isSelected ? p.color : 'var(--card)',
+                                    borderColor: isSelected ? p.color : 'var(--border)',
+                                    boxShadow: isSelected ? `0 0 20px ${p.color}40` : 'none'
                                 }}
                             >
                                 {p.name}
@@ -71,59 +93,74 @@ export default function SetupPage() {
                     })}
                 </div>
 
-                {/* Content Type Multi-Select */}
-                <div style={{ marginBottom: '40px', background: '#222', padding: '10px', borderRadius: '16px', display: 'flex', gap: '10px' }}>
-                    <button
-                        onClick={() => toggleContentType('movie')}
-                        style={{
-                            flex: 1,
-                            padding: '15px',
-                            borderRadius: '12px',
-                            background: contentTypes.includes('movie') ? 'var(--primary)' : '#333',
-                            border: 'none',
-                            color: 'white',
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            transition: 'all 0.2s',
-                            opacity: contentTypes.includes('movie') ? 1 : 0.7
-                        }}
-                    >
-                        🎬 {language === 'es' ? 'Películas' : 'Movies'}
-                    </button>
-                    <button
-                        onClick={() => toggleContentType('tv')}
-                        style={{
-                            flex: 1,
-                            padding: '15px',
-                            borderRadius: '12px',
-                            background: contentTypes.includes('tv') ? '#9900FF' : '#333',
-                            border: 'none',
-                            color: 'white',
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            transition: 'all 0.2s',
-                            opacity: contentTypes.includes('tv') ? 1 : 0.7
-                        }}
-                    >
-                        📺 {language === 'es' ? 'Series' : 'TV Shows'}
-                    </button>
+                {/* Content Type */}
+                <div className="mb-8 p-4 rounded-2xl bg-[var(--card)] border border-[var(--border)]">
+                    <h3 className="text-base font-bold mb-4 text-[var(--foreground)]">
+                        {language === 'es' ? 'Tipo de Contenido' : 'Content Type'}
+                    </h3>
+                    <div className="flex gap-3">
+                        <button
+                            type="button"
+                            onClick={() => toggleContentType('movie')}
+                            className={`flex-1 py-4 rounded-xl font-semibold transition-all border-2 text-white ${
+                                contentTypes.includes('movie')
+                                    ? 'bg-[var(--primary)] border-[var(--primary)] shadow-[var(--shadow-neon-pink)]'
+                                    : 'bg-[var(--card)] border-[var(--border)] opacity-70 hover:opacity-90'
+                            }`}
+                        >
+                            <Film size={20} className="inline-block mr-1.5 -mt-0.5" aria-hidden /> {t.movies}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => toggleContentType('tv')}
+                            className={`flex-1 py-4 rounded-xl font-semibold transition-all border-2 text-white ${
+                                contentTypes.includes('tv')
+                                    ? 'bg-[var(--secondary)] border-[var(--secondary)] shadow-[var(--shadow-neon-cyan)]'
+                                    : 'bg-[var(--card)] border-[var(--border)] opacity-70 hover:opacity-90'
+                            }`}
+                        >
+                            <Tv size={20} className="inline-block mr-1.5 -mt-0.5" aria-hidden /> {t.tvShows}
+                        </button>
+                    </div>
                 </div>
 
-                {/* Start Button */}
-                <div>
-                    <button
-                        onClick={handleContinue}
-                        className="btn-primary"
-                        disabled={selectedPlatforms.length === 0}
-                        style={{
-                            opacity: selectedPlatforms.length === 0 ? 0.5 : 1,
-                            width: '100%',
-                            padding: '20px',
-                            fontSize: '1.2rem'
-                        }}
-                    >
-                        {language === 'es' ? 'Empezar a Jugar' : 'Start Playing'}
-                    </button>
+                {/* Géneros Favoritos */}
+                <div className="mb-10 p-4 rounded-2xl bg-[var(--card)] border border-[var(--border)]">
+                    <h3 className="text-base font-bold mb-3 text-[var(--foreground)]">
+                        {language === 'es' ? 'Géneros (Opcional)' : 'Genres (Optional)'}
+                    </h3>
+                    <p className="text-sm text-[var(--muted-foreground)] mb-4">
+                        {language === 'es' ? 'Selecciona tus géneros favoritos para personalizar tus recomendaciones.' : 'Select your favorite genres to personalize your recommendations.'}
+                    </p>
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3">
+                        {TMDB_GENRES.map(genre => {
+                            const isSelected = selectedGenres.includes(genre.id.toString());
+                            return (
+                                <button
+                                    key={genre.id}
+                                    type="button"
+                                    onClick={() => toggleGenre(genre.id.toString())}
+                                    className={`py-2.5 px-3 rounded-xl text-sm font-medium transition-all border-2 text-center shadow-[0_0_0_1px_rgba(148,163,184,0.2)] ${
+                                        isSelected
+                                            ? 'bg-[var(--secondary)] border-[var(--secondary)] text-[var(--background)]'
+                                            : 'bg-[var(--card)] border-[var(--border)] text-[var(--foreground)] hover:border-[var(--muted-foreground)]/50'
+                                    }`}
+                                >
+                                    {language === 'es' ? genre.name : genre.name_en}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                <Button
+                    onClick={handleContinue}
+                    disabled={selectedPlatforms.length === 0 || contentTypes.length === 0}
+                    className="w-full py-6 text-lg"
+                >
+                    {t.startPlaying}
+                </Button>
+                    </div>
                 </div>
             </div>
         </main>

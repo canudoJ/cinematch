@@ -4,15 +4,10 @@ import React, { createContext, useContext, useEffect, useState, ReactNode, useCa
 import { Session, User, SupabaseClient } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import type { Profile } from '@/types/index';
 
-// Types
-export type Profile = {
-    id: string;
-    username: string;
-    avatar_url: string | null;
-    level: number;
-    is_premium: boolean;
-};
+// Re-export so existing imports from AuthProvider siguen funcionando
+export type { Profile };
 
 interface AuthContextType {
     user: User | null;
@@ -21,10 +16,15 @@ interface AuthContextType {
     loading: boolean;
     error: string | null;
     supabase: SupabaseClient;
-    signInWithGoogle: () => Promise<void>;
+    /** Usuario anónimo creado con "Probar sin registrarse" */
+    isGuest: boolean;
+    signInAsGuest: () => Promise<void>;
     signOut: () => Promise<void>;
     updateProfile: (updates: Partial<Profile>) => Promise<void>;
 }
+
+// Netflix, Prime Video, Disney+ y Max
+const GUEST_DEFAULT_PLATFORMS = ['8', '119', '337', '384'];
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -47,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (profileError) {
                 // Si el perfil no existe, no es un error crítico - el usuario puede seguir usando la app
                 if (profileError.code === 'PGRST116') {
-                    console.log('Profile not found for user, will be created on first update');
+                    console.warn('Profile not found for user, will be created on first update');
                     return;
                 }
                 console.error('Profile fetch error:', profileError);
@@ -108,7 +108,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
             if (!mounted) return;
 
-            console.log('Auth Event:', event);
             setError(null);
 
             try {
@@ -142,11 +141,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
     }, [fetchProfile]); // Solo fetchProfile como dependencia (memoizado)
 
-    const signInWithGoogle = async () => {
-        await supabase.auth.signInWithOAuth({
-            provider: 'google',
-            options: { redirectTo: `${window.location.origin}/auth/callback` },
+    /**
+     * Modo invitado: crea un usuario anónimo de Supabase. Es un usuario real
+     * (RLS, Realtime y Storage funcionan igual), sin email ni contraseña.
+     * Se precargan preferencias por defecto para que el feed aparezca al instante.
+     */
+    const signInAsGuest = async () => {
+        localStorage.setItem('cinematch_platforms', JSON.stringify(GUEST_DEFAULT_PLATFORMS));
+        localStorage.setItem('cinematch_content_types', JSON.stringify(['movie', 'tv']));
+
+        const username = `invitado_${Math.random().toString(36).slice(2, 7)}`;
+        const { data, error: signInError } = await supabase.auth.signInAnonymously({
+            options: { data: { username } },
         });
+        if (signInError || !data.user) throw signInError ?? new Error('No se pudo iniciar la sesión de invitado');
+
+        // El trigger handle_new_user crea el perfil; el upsert cubre el caso de que no exista
+        await supabase.from('profiles').upsert({
+            id: data.user.id,
+            username,
+            preferred_platforms: GUEST_DEFAULT_PLATFORMS,
+            preferred_content_types: ['movie', 'tv'],
+        });
+        await fetchProfile(data.user.id);
     };
 
     const signOut = async () => {
@@ -185,7 +202,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return (
         <AuthContext.Provider value={{
             user, session, profile, loading, error, supabase,
-            signInWithGoogle, signOut, updateProfile
+            isGuest: !!user?.is_anonymous, signInAsGuest, signOut, updateProfile
         }}>
             {loading ? (
                 <div style={{

@@ -6,13 +6,23 @@ import { useLanguage } from '@/context/LanguageContext';
 import { discoverContent, TMDBItem } from '@/services/tmdb';
 import { Movie } from '@/lib/data';
 import BackButton from '@/components/ui/BackButton';
+import { useToast } from '@/components/ui/Toast';
+import {
+    Frown, Laugh, AlertTriangle, Zap, Film, Palette, Dices, Brain, Heart, Search,
+    Timer, Tv, Wine, Building2, Trash2, Sparkles, type LucideIcon
+} from 'lucide-react';
 
 // --- TYPES ---
 type QuestionId = 'vibe' | 'style' | 'brain' | 'duration' | 'quality';
 
+const AFFINITY_ICONS: Record<string, LucideIcon> = {
+    Frown, Laugh, AlertTriangle, Zap, Film, Palette, Dices, Brain, Heart, Search,
+    Timer, Tv, Wine, Building2, Trash2
+};
+
 interface QuizOption {
     label: string;
-    emoji: string;
+    iconName: keyof typeof AFFINITY_ICONS;
     value: string;
     color: string;
 }
@@ -29,46 +39,46 @@ const QUESTIONS: Question[] = [
         id: 'vibe',
         title: "¿Mood de hoy?",
         options: [
-            { label: 'cry', emoji: '😢', value: 'cry', color: '#6c5ce7' },
-            { label: 'laugh', emoji: '😂', value: 'laugh', color: '#fab1a0' },
-            { label: 'tension', emoji: '😨', value: 'tension', color: '#0984e3' },
-            { label: 'adrenaline', emoji: '💥', value: 'adrenaline', color: '#ff7675' }
+            { label: 'cry', iconName: 'Frown', value: 'cry', color: '#6c5ce7' },
+            { label: 'laugh', iconName: 'Laugh', value: 'laugh', color: '#fab1a0' },
+            { label: 'tension', iconName: 'AlertTriangle', value: 'tension', color: '#0984e3' },
+            { label: 'adrenaline', iconName: 'Zap', value: 'adrenaline', color: '#ff7675' }
         ]
     },
     {
         id: 'style',
         title: "¿Mundo visual?",
         options: [
-            { label: 'Carne y Hueso', emoji: '🎬', value: 'real', color: '#636e72' },
-            { label: 'Píxeles y Tinta', emoji: '🎨', value: 'animation', color: '#00b894' },
-            { label: 'Sorpréndeme', emoji: '🎲', value: 'mixed', color: '#a29bfe' }
+            { label: 'Carne y Hueso', iconName: 'Film', value: 'real', color: '#636e72' },
+            { label: 'Píxeles y Tinta', iconName: 'Palette', value: 'animation', color: '#00b894' },
+            { label: 'Sorpréndeme', iconName: 'Dices', value: 'mixed', color: '#a29bfe' }
         ]
     },
     {
         id: 'brain',
         title: "¿Nivel de atención?",
         options: [
-            { label: 'Modo Zombi', emoji: '🧟', value: 'zombie', color: '#fd79a8' },
-            { label: 'Tranqui', emoji: '🧘', value: 'casual', color: '#74b9ff' },
-            { label: 'Sherlock', emoji: '🕵️', value: 'sherlock', color: '#6c5ce7' }
+            { label: 'Modo Zombi', iconName: 'Brain', value: 'zombie', color: '#fd79a8' },
+            { label: 'Tranqui', iconName: 'Heart', value: 'casual', color: '#74b9ff' },
+            { label: 'Sherlock', iconName: 'Search', value: 'sherlock', color: '#6c5ce7' }
         ]
     },
     {
         id: 'duration',
         title: "¿Cuánto tiempo tienes?",
         options: [
-            { label: 'Cortita (<90m)', emoji: '⏱️', value: 'short', color: '#00cec9' },
-            { label: 'Peli Estándar', emoji: '🍿', value: 'movie', color: '#55efc4' },
-            { label: 'Maratón Serie', emoji: '📺', value: 'binge', color: '#fdcb6e' }
+            { label: 'Cortita (<90m)', iconName: 'Timer', value: 'short', color: '#00cec9' },
+            { label: 'Peli Estándar', iconName: 'Film', value: 'movie', color: '#55efc4' },
+            { label: 'Maratón Serie', iconName: 'Tv', value: 'binge', color: '#fdcb6e' }
         ]
     },
     {
         id: 'quality',
         title: "¿Tu paladar hoy?",
         options: [
-            { label: 'Gourmet / Culto', emoji: '🍷', value: 'gourmet', color: '#d63031' },
-            { label: 'Blockbuster', emoji: '🏟️', value: 'blockbuster', color: '#ffeaa7' },
-            { label: 'Placer Culposo', emoji: '🗑️', value: 'trash', color: '#b2bec3' }
+            { label: 'Gourmet / Culto', iconName: 'Wine', value: 'gourmet', color: '#d63031' },
+            { label: 'Blockbuster', iconName: 'Building2', value: 'blockbuster', color: '#ffeaa7' },
+            { label: 'Placer Culposo', iconName: 'Trash2', value: 'trash', color: '#b2bec3' }
         ]
     }
 ];
@@ -76,6 +86,8 @@ const QUESTIONS: Question[] = [
 export default function AffinityPage() {
     const router = useRouter();
     const { saveDeck, setActiveDeck } = useDecks();
+    const { showToast } = useToast();
+    const { language } = useLanguage();
     const [step, setStep] = useState(0);
     const [answers, setAnswers] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(false);
@@ -159,6 +171,7 @@ export default function AffinityPage() {
         }
 
         // --- EXECUTE API ---
+        const tmdbLang = language === 'es' ? 'es-ES' : 'en-US';
         const results = await discoverContent(type, {
             with_genres: withGenres.join(','),
             without_genres: withoutGenres.join(','),
@@ -167,20 +180,21 @@ export default function AffinityPage() {
             vote_average_gte: voteAverageGte,
             vote_average_lte: voteAverageLte,
             vote_count_gte: voteCountGte,
-            sort_by: sortBy
+            sort_by: sortBy,
+            lang: tmdbLang
         });
 
         if (results && results.length > 0) {
             const movies: Movie[] = results.slice(0, 15).map(item => ({
                 id: item.id.toString(),
-                type: type, // Matches the requested type
+                type: type,
                 title: type === 'movie' ? item.title! : item.name!,
                 title_es: type === 'movie' ? item.title : item.name,
                 year: new Date(item.release_date || item.first_air_date || Date.now()).getFullYear(),
                 rating: item.vote_average,
                 image: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : '',
                 synopsis: item.overview,
-                synopsis_es: item.overview,
+                synopsis_es: language === 'es' ? item.overview : '',
                 genres: []
             }));
 
@@ -195,23 +209,20 @@ export default function AffinityPage() {
                 title: `Match ${quality} ${today}`,
                 description: `Mood: ${mood} • ${type === 'movie' ? 'Peli' : 'Serie'} • ${style}`,
                 movies: movies,
-                tags: ['⚡ Quiz', `✨ ${mood}`],
+                tags: ['Quiz', mood],
                 likes: 0,
                 isPublic: false,
-                isOfficial: false
+                isOfficial: false,
+                privacy: 'private' as const
             };
 
-            await saveDeck({
-                title: newDeck.title,
-                description: newDeck.description,
-                tags: [mood], // Use mood as tag
-                items: newDeck.movies
-            });
+            // NO GUARDAR: Este es un deck temporal del modo de juego, no debe guardarse en la base de datos
+            // Solo establecerlo como activeDeck para visualización temporal
             setActiveDeck(newDeck);
             router.push('/');
 
         } else {
-            alert("No se encontraron pelis con esos filtros tan específicos :( Intenta relajar tus estándares.");
+            showToast("No se encontraron pelis con esos filtros tan específicos :( Intenta relajar tus estándares.", 'info');
             setLoading(false);
             setStep(0);
         }
@@ -220,7 +231,7 @@ export default function AffinityPage() {
     if (loading) {
         return (
             <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'black', color: 'white' }}>
-                <div style={{ fontSize: '4rem', marginBottom: '20px' }} className="animate-spin-slow">🔮</div>
+                <Sparkles size={64} className="animate-spin-slow text-[var(--secondary)] mx-auto mb-5" aria-hidden />
                 <h2>Cocinando tu cartelera...</h2>
             </div>
         );
@@ -229,7 +240,7 @@ export default function AffinityPage() {
     return (
         <div style={{
             height: '100vh',
-            background: 'var(--bg-darker)',
+            background: 'var(--background)',
             padding: '20px',
             display: 'flex',
             flexDirection: 'column',
@@ -246,7 +257,7 @@ export default function AffinityPage() {
                         flex: 1,
                         height: '6px',
                         borderRadius: '3px',
-                        background: i <= step ? 'var(--accent-green)' : '#333',
+                        background: i <= step ? 'var(--secondary)' : 'var(--card)',
                         transition: 'background 0.3s'
                     }} />
                 ))}
@@ -261,7 +272,7 @@ export default function AffinityPage() {
                             key={i}
                             onClick={() => handleAnswer(opt.value)}
                             style={{
-                                background: '#252525',
+                                background: 'var(--card)',
                                 border: `2px solid ${opt.color}`,
                                 borderRadius: '20px',
                                 padding: '20px 10px',
@@ -275,7 +286,7 @@ export default function AffinityPage() {
                             onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
                             onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
                         >
-                            <span style={{ fontSize: '3rem' }}>{opt.emoji}</span>
+                            {AFFINITY_ICONS[opt.iconName] && React.createElement(AFFINITY_ICONS[opt.iconName], { size: 48, style: { flexShrink: 0 }, 'aria-hidden': true })}
                             <span style={{ fontWeight: 'bold', fontSize: '1rem', color: 'white' }}>{opt.label}</span>
                         </button>
                     ))}

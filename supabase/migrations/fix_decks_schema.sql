@@ -212,3 +212,108 @@ BEGIN
         ALTER TABLE public.decks DROP COLUMN name;
     END IF;
 END $$;
+
+-- 11. Agregar campos de privacidad y vistas
+DO $$ 
+BEGIN
+    -- Agregar privacy si no existe (valores: 'private', 'friends', 'public')
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' 
+        AND table_name = 'decks' 
+        AND column_name = 'privacy'
+    ) THEN
+        ALTER TABLE public.decks ADD COLUMN privacy TEXT DEFAULT 'private';
+        -- Actualizar valores existentes a 'private' por defecto
+        UPDATE public.decks SET privacy = 'private' WHERE privacy IS NULL;
+        -- Asegurar que no sea NULL
+        ALTER TABLE public.decks ALTER COLUMN privacy SET DEFAULT 'private';
+    END IF;
+    
+    -- Agregar views si no existe (contador de vistas para decks públicos)
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' 
+        AND table_name = 'decks' 
+        AND column_name = 'views'
+    ) THEN
+        ALTER TABLE public.decks ADD COLUMN views INTEGER DEFAULT 0;
+        -- Inicializar valores existentes a 0
+        UPDATE public.decks SET views = 0 WHERE views IS NULL;
+    END IF;
+END $$;
+
+-- 12. Crear índices para mejorar consultas de privacidad y popularidad
+CREATE INDEX IF NOT EXISTS idx_decks_privacy ON public.decks(privacy);
+CREATE INDEX IF NOT EXISTS idx_decks_views ON public.decks(views DESC) WHERE privacy = 'public';
+
+-- 13. Actualizar políticas RLS para permitir ver decks de amigos y públicos
+-- Política para ver decks propios (ya existe, pero la mantenemos)
+-- No necesitamos cambiar esta, ya está bien
+
+-- Política para ver decks de amigos (privacy = 'friends')
+DROP POLICY IF EXISTS "Users can view friends decks" ON public.decks;
+CREATE POLICY "Users can view friends decks"
+    ON public.decks FOR SELECT
+    USING (
+        privacy = 'friends' 
+        AND user_id IN (
+            SELECT CASE 
+                WHEN requester_id = auth.uid() THEN receiver_id
+                WHEN receiver_id = auth.uid() THEN requester_id
+            END
+            FROM public.friendships
+            WHERE status = 'accepted'
+            AND (requester_id = auth.uid() OR receiver_id = auth.uid())
+        )
+    );
+
+-- Política para ver decks públicos (privacy = 'public')
+DROP POLICY IF EXISTS "Users can view public decks" ON public.decks;
+CREATE POLICY "Users can view public decks"
+    ON public.decks FOR SELECT
+    USING (privacy = 'public');
+
+-- Actualizar política de deck_items para permitir ver items de decks de amigos y públicos
+DROP POLICY IF EXISTS "Users can view deck items of friends and public decks" ON public.deck_items;
+CREATE POLICY "Users can view deck items of friends and public decks"
+    ON public.deck_items FOR SELECT
+    USING (
+        EXISTS (
+            SELECT 1 FROM public.decks
+            WHERE decks.id = deck_items.deck_id
+            AND (
+                -- Deck propio
+                decks.user_id = auth.uid()
+                -- O deck de amigo con privacy = 'friends'
+                OR (
+                    decks.privacy = 'friends'
+                    AND decks.user_id IN (
+                        SELECT CASE 
+                            WHEN requester_id = auth.uid() THEN receiver_id
+                            WHEN receiver_id = auth.uid() THEN requester_id
+                        END
+                        FROM public.friendships
+                        WHERE status = 'accepted'
+                        AND (requester_id = auth.uid() OR receiver_id = auth.uid())
+                    )
+                )
+                -- O deck público
+                OR decks.privacy = 'public'
+            )
+        )
+    );
+
+-- 14. Crear función RPC para incrementar vistas de un deck
+CREATE OR REPLACE FUNCTION increment_deck_views(deck_id UUID)
+RETURNS void AS $$
+BEGIN
+    UPDATE public.decks
+    SET views = COALESCE(views, 0) + 1
+    WHERE id = deck_id
+    AND privacy = 'public';
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Permitir a usuarios autenticados ejecutar la función
+GRANT EXECUTE ON FUNCTION increment_deck_views(UUID) TO authenticated;

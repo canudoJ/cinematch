@@ -2,94 +2,458 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================
+   Optimizaciones para móvil (Touch)
+   ============================================ */
+
+/* Mejorar respuesta táctil en elementos interactivos */
+button,
+a,
+[role="button"],
+[onclick],
+[tabindex="0"] {
+  touch-action: manipulation; /* Elimina delay de 300ms en móvil */
+  -webkit-touch-callout: none; /* Evita menú contextual al mantener presionado */
+}
+
+/* Áreas táctiles más grandes en móvil */
+@media (max-width: 768px) {
+  button,
+  a,
+  [role="button"] {
+    min-height: 44px; /* Tamaño mínimo recomendado para toques */
+    min-width: 44px;
+  }
+}
+
+/* ============================================
+   Neon Cinema – Design tokens (dark by default)
+   ============================================ */
 :root {
-  --background: #050505;
-  --foreground: #ffffff;
-  --primary: #FF2E63;
-  /* Neon Red/Pink */
-  --secondary: #08D9D6;
-  /* Neon Cyan */
-  --card-bg: #1A1A1A;
-  --text-muted: #888888;
-  --font-main: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --radius: 16px;
-  --shadow-lg: 0 10px 40px -10px rgba(0, 0, 0, 0.5);
-  --shadow-neon: 0 0 20px rgba(255, 46, 99, 0.3);
-  
-  /* Colores consistentes para toda la aplicación */
-  --accent-green: #4bffb3;
-  --accent-green-alt: #00ff9d;
-  --accent-red: #ff4b4b;
+  /* Core (requeridos) */
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+  --primary: #ff0055;
+  --primary-foreground: #ffffff;
+  --secondary: #00e5ff;
+  --card: #121212;
+  --card-foreground: #fafafa;
+  --surface: #121212;
+  --surface-border: rgba(255, 255, 255, 0.1);
+  --destructive: #ff4444;
+  --border: #262626;
+  --input: #262626;
+  --ring: #ff0055;
+
+  /* Neon Cinema extras (compatibilidad y semántica) */
+  --secondary-foreground: #0a0a0a;
+  --muted: #262626;
+  --muted-foreground: #a3a3a3;
+  --accent: #00e5ff;
+  --radius: 0.75rem;
+  --radius-sm: 0.5rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+  --shadow-neon-pink: 0 0 20px rgba(255, 0, 85, 0.35);
+  --shadow-neon-cyan: 0 0 20px rgba(0, 229, 255, 0.25);
+  /* Compatibilidad: alias para componentes existentes (migrar a nuevas vars) */
+  --bg-dark: var(--card);
+  --bg-darker: var(--background);
+  --bg-card: var(--card);
+  --border-color: var(--border);
+  --text-secondary: var(--muted-foreground);
+  --text-tertiary: #737373;
+  --accent-green: var(--secondary);
+  --accent-green-alt: #00e5ff;
+  --accent-red: var(--destructive);
   --accent-red-alt: #ff4757;
-  --accent-orange: #ff9f43;
-  --bg-dark: #111;
-  --bg-darker: #1a1a1a;
-  --bg-card: #252525;
-  --border-color: #333;
-  --text-secondary: #888;
-  --text-tertiary: #666;
-  
-  /* Espaciado consistente */
-  --spacing-xs: 5px;
-  --spacing-sm: 10px;
-  --spacing-md: 15px;
-  --spacing-lg: 20px;
-  --spacing-xl: 30px;
-  --spacing-2xl: 40px;
-  
-  /* Border radius consistente */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
-  --radius-2xl: 24px;
-  --radius-full: 50px;
+  --overlay-dark: rgba(0, 0, 0, 0.7);
+  --border-width: 1px;
+  --accent-mid: #c84cff;
+  /* Fondo texturizado modo oscuro (líneas diagonales discretas) */
+  --background-texture: repeating-linear-gradient(
+    135deg,
+    #495057 0px,
+    #495057 1px,
+    transparent 1px,
+    transparent 32px
+  );
+
+  /* Scrollbars Neon Cinema */
+  --scrollbar-track: #171717;
+  --scrollbar-thumb: #404040;
+  --scrollbar-thumb-hover: rgba(0, 229, 255, 0.5);
+  --scrollbar-thumb-active: rgba(255, 0, 85, 0.4);
 }
 
+/* Modo claro (opcional; la base es dark) – .light y body.theme-light para ThemeContext */
+.light,
+body.theme-light {
+  --background: #f0f2f5;
+  --foreground: #0a0a0a;
+  --primary: #e0004a;
+  --primary-foreground: #ffffff;
+  --secondary: #0090aa;
+  --card: #ffffff;
+  --card-foreground: #0a0a0a;
+  --surface: #f8f9fa;
+  --surface-border: rgba(0, 0, 0, 0.12);
+  --destructive: #cc2020;
+  --border: #b0b8c4;
+  --input: #dce1e8;
+  --ring: #e0004a;
+  --muted: #dce1e8;
+  --muted-foreground: #3a3a3a;
+  --bg-dark: var(--card);
+  --bg-darker: var(--background);
+  --bg-card: var(--card);
+  --border-color: var(--border);
+  --text-secondary: var(--muted-foreground);
+  --text-tertiary: #555555;
+  --overlay-dark: rgba(0, 0, 0, 0.5);
+  --shadow-neon-pink: 0 0 12px rgba(224, 0, 74, 0.2);
+  --shadow-neon-cyan: 0 0 12px rgba(0, 144, 170, 0.2);
+  /* Fondo texturizado modo día (líneas diagonales discretas) */
+  --background-texture: repeating-linear-gradient(
+    135deg,
+    #CED4DA 0px,
+    #CED4DA 1px,
+    transparent 1px,
+    transparent 32px
+  );
+  --scrollbar-track: #dce1e8;
+  --scrollbar-thumb: #9aa3ad;
+  --scrollbar-thumb-hover: rgba(0, 144, 170, 0.5);
+  --scrollbar-thumb-active: rgba(224, 0, 74, 0.35);
+}
+
+/* Correcciones de contraste modo día — clases Tailwind con valores hardcodeados */
+body.theme-light .modal-surface,
+body.theme-light .section-card,
+body.theme-light .surface-card {
+  border-color: var(--border);
+}
+
+/* Textos blancos hardcodeados que no se ven en fondo claro */
+body.theme-light .text-white {
+  color: var(--foreground) !important;
+}
+
+/* Fondos oscuros hardcodeados */
+body.theme-light .bg-black\/50,
+body.theme-light .bg-\[var\(--bg-dark\)\]\/80,
+body.theme-light .bg-\[var\(--bg-dark\)\]\/50,
+body.theme-light .bg-\[var\(--bg-dark\)\]\/30 {
+  background-color: rgba(0,0,0,0.04) !important;
+}
+
+/* Bordes white/10 de Tailwind invisibles en modo claro */
+body.theme-light .border-white\/10,
+body.theme-light .border-gray-800,
+body.theme-light .border-gray-700 {
+  border-color: var(--border) !important;
+}
+
+/* Textos grises de Tailwind — mejorar contraste */
+body.theme-light .text-gray-400,
+body.theme-light .text-gray-500,
+body.theme-light .text-\[\#888\] {
+  color: #444 !important;
+}
+body.theme-light .text-gray-600 {
+  color: #333 !important;
+}
+
+/* ============================================
+   Scrollbars globales – Neon Cinema (CRÍTICO)
+   Elimina el scrollbar blanco nativo del navegador
+   ============================================ */
 * {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  /* Eliminar highlight azul al tocar en móvil */
+  -webkit-tap-highlight-color: transparent;
+  tap-highlight-color: transparent;
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: var(--font-main);
-  overflow-x: hidden;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-a {
-  color: inherit;
-  text-decoration: none;
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+  border-radius: 0;
 }
 
-button {
-  cursor: pointer;
-  border: none;
-  font-family: inherit;
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 9999px;
+  border: 2px solid var(--scrollbar-track);
 }
 
-.container {
-  max-width: 600px;
-  margin: 0 auto;
-  padding: 20px;
-  width: 100%;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
 }
 
-/* Animations */
+*::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
+}
+
+@layer base {
+  * {
+    @apply border-border box-border;
+  }
+  html {
+    @apply antialiased;
+  }
+  body {
+    @apply bg-background text-foreground h-screen w-screen flex flex-col overflow-hidden;
+    font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  }
+  a {
+    @apply text-inherit no-underline;
+  }
+  button {
+    @apply cursor-pointer border-none;
+    font-family: inherit;
+  }
+  /* Focus morado en campos de texto (sustituye el amarillo por defecto del navegador) */
+  input:focus,
+  select:focus,
+  textarea:focus {
+    outline: none;
+    box-shadow: 0 0 0 1px var(--accent-mid);
+  }
+}
+
+/* ============================================
+   Fondos diagonales (wallpapers SVG) – global
+   Se aplican en escritorio y móvil, según tema
+   ============================================ */
+body.theme-light {
+  background-color: #f3f4f7; /* off-white, no blanco puro */
+  background-image: url('/bg-day-diagonal.svg');
+  background-size: cover;
+  background-position: center center;
+  background-repeat: no-repeat;
+}
+
+body.theme-dark {
+  background-color: #121212;
+  background-image: url('/bg-night-diagonal.svg');
+  background-size: cover;
+  background-position: center center;
+  background-repeat: no-repeat;
+}
+
+@layer components {
+  .container {
+    @apply max-w-[600px] mx-auto px-5 w-full flex-1 flex flex-col;
+  }
+
+  /* Capas: fondo #0a0a0a, superficies #121212 + borde flotante */
+  .modal-surface {
+    @apply rounded-2xl border border-white/10 max-h-[90vh] flex flex-col;
+    background: var(--card);
+    padding: 1.5rem;
+  }
+  @media (min-width: 640px) {
+    .modal-surface {
+      padding: 1.875rem;
+    }
+  }
+
+  .section-card {
+    @apply rounded-2xl border border-white/10 p-5;
+    background: var(--card);
+  }
+
+  .surface-card {
+    @apply rounded-2xl border border-white/10;
+    background: var(--surface);
+  }
+
+  .surface-glass {
+    @apply rounded-2xl border border-white/10 backdrop-blur-lg;
+    background: rgba(38, 38, 38, 0.9);
+  }
+
+  .card-neon {
+    @apply rounded-2xl border border-white/10 bg-[var(--card)];
+  }
+  .card-neon-subtle {
+    @apply rounded-2xl border border-white/10;
+  }
+
+  /* Tarjetas de Mi Videoteca (grid) */
+  .library-card {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #121212;
+  }
+  .library-card-inner {
+    position: relative;
+    width: 100%;
+    padding-bottom: 66.66%; /* relación 2:3 */
+    border-radius: inherit;
+    overflow: hidden;
+  }
+  .library-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    padding: 2px;
+    border-radius: inherit;
+    background: linear-gradient(to bottom, var(--primary), var(--secondary));
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0;
+    transition: opacity 0.18s ease-out;
+    pointer-events: none;
+  }
+  .library-card:hover::before,
+  .library-card:focus-within::before {
+    opacity: 1;
+  }
+
+  .heading-xl {
+    @apply text-[1.8rem] font-extrabold tracking-tight;
+  }
+  .heading-lg {
+    @apply text-xl font-bold;
+  }
+  @media (min-width: 640px) {
+    .heading-xl {
+      font-size: 2.1rem;
+    }
+    .heading-lg {
+      font-size: 1.4rem;
+    }
+  }
+
+  .btn-primary {
+    @apply w-full text-center font-bold text-lg py-3.5 px-6 rounded-full transition-all duration-200;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    box-shadow: var(--shadow-neon-pink);
+  }
+  .btn-primary:hover {
+    filter: brightness(1.1);
+  }
+  .btn-primary:active {
+    transform: scale(0.98);
+  }
+  @media (max-width: 480px) {
+    .btn-primary {
+      @apply py-3 px-5 text-base;
+    }
+  }
+
+  /* Ocultar descripción de barajas en móvil cuando falta espacio */
+  @media (max-width: 640px) {
+    .deck-description {
+      display: none !important;
+    }
+  }
+
+  /* Focus morado solo en el contenedor de DeckTagInput, no en el input */
+  .deck-tag-input-container:focus-within {
+    border-color: var(--accent-mid);
+  }
+  .deck-tag-input-field:focus {
+    box-shadow: none;
+  }
+
+  .btn-secondary {
+    @apply rounded-full font-semibold text-[0.95rem] py-3 px-5 border border-white/10 bg-transparent text-foreground transition-all duration-150;
+  }
+  .btn-secondary:hover {
+    @apply bg-white/10 border-white/20;
+  }
+  .btn-secondary:active {
+    transform: scale(0.97);
+  }
+
+  .btn-icon {
+    @apply w-14 h-14 rounded-full flex items-center justify-center text-2xl border border-white/10 transition-all duration-200;
+    background: var(--card);
+    color: var(--foreground);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    touch-action: manipulation; /* Mejor respuesta táctil en móvil */
+  }
+  .btn-icon:hover {
+    transform: scale(1.1);
+  }
+  .btn-icon.like {
+    color: var(--secondary);
+    border-color: var(--secondary);
+    box-shadow: var(--shadow-neon-cyan);
+  }
+  .btn-icon.dislike {
+    color: var(--destructive);
+    border-color: var(--destructive);
+    box-shadow: 0 0 20px rgba(255, 68, 68, 0.45);
+  }
+
+  /* Espacio seguro para Bottom Nav: evita que botones Like/Dislike se solapen con la barra */
+  .bottom-nav-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+
+  .text-gradient {
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .border-gradient {
+    border: 1px solid transparent;
+    background: linear-gradient(var(--card), var(--card)) padding-box,
+      linear-gradient(135deg, var(--primary), var(--secondary)) border-box;
+  }
+
+  /* Opcional: scrollbar más visible (p. ej. en modales) – usa .custom-scrollbar */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 8px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+    border-radius: 9999px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 9999px;
+    border: 2px solid var(--scrollbar-track);
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+  }
+}
+
+@layer utilities {
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-out forwards;
+  }
+  .animate-pop-in {
+    animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  }
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;
     transform: translateY(10px);
   }
-
   to {
     opacity: 1;
     transform: translateY(0);
@@ -97,75 +461,12 @@ button {
 }
 
 @keyframes popIn {
-  0% {
+  from {
     transform: scale(0.9);
     opacity: 0;
   }
-
-  100% {
+  to {
     transform: scale(1);
     opacity: 1;
   }
-}
-
-.animate-fade-in {
-  animation: fadeIn 0.5s ease-out forwards;
-}
-
-.animate-pop-in {
-  animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-}
-
-/* Utilities */
-.btn-primary {
-  background: var(--primary);
-  color: white;
-  padding: 16px 32px;
-  border-radius: 50px;
-  font-weight: 700;
-  font-size: 1.1rem;
-  box-shadow: var(--shadow-neon);
-  transition: transform 0.2s, box-shadow 0.2s;
-  width: 100%;
-  text-align: center;
-}
-
-.btn-primary:active {
-  transform: scale(0.98);
-}
-
-.btn-icon {
-  width: 60px;
-  height: 60px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
-  background: var(--card-bg);
-  color: white;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  transition: transform 0.2s, background 0.2s;
-  border: 1px solid #333;
-}
-
-.btn-icon.dislike {
-  color: var(--accent-red);
-  border-color: var(--accent-red);
-}
-
-.btn-icon.like {
-  color: var(--accent-green);
-  border-color: var(--accent-green);
-  box-shadow: 0 0 15px rgba(75, 255, 179, 0.2);
-}
-
-.btn-icon:hover {
-  transform: scale(1.1);
-}
-
-.text-gradient {
-  background: linear-gradient(45deg, var(--primary), var(--secondary));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
 }

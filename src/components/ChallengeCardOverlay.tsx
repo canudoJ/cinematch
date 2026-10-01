@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Movie } from '@/lib/data';
+import { Flame } from 'lucide-react';
 
 interface ChallengeCardOverlayProps {
     movie: Movie;
@@ -24,14 +25,14 @@ export default function ChallengeCardOverlay({ movie, sender, onResolve }: Chall
                 height: '100%',
                 borderRadius: '20px',
                 overflow: 'hidden',
-                boxShadow: '0 0 30px var(--accent-red-alt), 0 0 60px #e1b12c', // Fire glow
-                border: '4px solid var(--accent-red-alt)'
+                boxShadow: '0 0 30px var(--destructive), 0 0 60px #e1b12c', // Fire glow
+                border: '4px solid var(--destructive)'
             }}>
 
                 {/* Header Banner */}
                 <div style={{
                     position: 'absolute', top: 0, left: 0, right: 0,
-                    background: 'linear-gradient(to bottom, var(--accent-red-alt), transparent)',
+                    background: 'linear-gradient(to bottom, var(--destructive), transparent)',
                     padding: '20px',
                     textAlign: 'center',
                     zIndex: 10
@@ -41,7 +42,7 @@ export default function ChallengeCardOverlay({ movie, sender, onResolve }: Chall
                         textTransform: 'uppercase', letterSpacing: '1px',
                         textShadow: '0 2px 4px black'
                     }}>
-                        🔥 Retado por {sender} 🔥
+                        <Flame size={18} className="inline-block mr-1 -mt-0.5 text-[var(--destructive)]" aria-hidden /> Retado por {sender} <Flame size={18} className="inline-block ml-1 -mt-0.5 text-[var(--destructive)]" aria-hidden />
                     </div>
                 </div>
 
@@ -80,13 +81,13 @@ export default function ChallengeCardOverlay({ movie, sender, onResolve }: Chall
                             onClick={() => onResolve(true)}
                             style={{
                                 flex: 2, padding: '15px', borderRadius: '15px',
-                                background: 'linear-gradient(45deg, var(--accent-red-alt), #e1b12c)', border: 'none',
+                                background: 'linear-gradient(45deg, var(--destructive), #e1b12c)', border: 'none',
                                 color: 'white', fontWeight: '900', fontSize: '1.2rem',
                                 boxShadow: '0 5px 20px rgba(255, 71, 87, 0.4)',
                                 transform: 'scale(1.05)'
                             }}
                         >
-                            ¡ACEPTAR! 🔥
+                            <Flame size={20} className="inline-block mr-1.5 -mt-0.5" aria-hidden /> ¡ACEPTAR!
                         </button>
                     </div>
                 </div>

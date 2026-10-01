@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { TAG_WARM_BG, getTagIcon, getTagLabel } from '@/lib/constants';
 
 interface DeckTagInputProps {
     tags: string[];
@@ -7,9 +8,9 @@ interface DeckTagInputProps {
 }
 
 const SUGGESTED_TAGS: Record<string, string[]> = {
-    Moods: ['😌 Chill', '😂 Risas', '😢 Llorar', '😨 Tensión', '🤯 Mind-bending'],
-    Occasions: ['🍷 Cita', '🍕 Amigos', '🛌 Domingo', '🍿 Maratón'],
-    Genres: ['👻 Terror', '👽 Sci-Fi', '🧙‍♂️ Fantasía', '🇯🇵 Anime', '🏛️ Clásicos']
+    Moods: ['Chill', 'Risas', 'Llorar', 'Tensión', 'Mind-bending'],
+    Occasions: ['Cita', 'Amigos', 'Domingo', 'Maratón'],
+    Genres: ['Terror', 'Sci-Fi', 'Fantasía', 'Anime', 'Clásicos']
 };
 
 export default function DeckTagInput({ tags, onTagsChange, placeholder = "Add tags (e.g. Chill, Sci-Fi)..." }: DeckTagInputProps) {
@@ -32,12 +33,13 @@ export default function DeckTagInput({ tags, onTagsChange, placeholder = "Add ta
         if (tags.length >= 5) return;
 
         let formattedTag = tag.trim();
-        // Auto-emoji logic check (simple)
-        // If user typed "Terror" and we have "👻 Terror" in known tags, swap it.
+        // Normalizar: si coincide con un tag conocido, usar su nombre canónico (sin emoji)
         const allSuggestions = Object.values(SUGGESTED_TAGS).flat();
-        const match = allSuggestions.find(s => s.toLowerCase().includes(formattedTag.toLowerCase()));
-        if (match && !formattedTag.match(/[\p{Emoji}]/u)) {
-            formattedTag = match; // Replace with emoji version
+        const match = allSuggestions.find(s => s.toLowerCase().includes(formattedTag.replace(/[\p{Emoji}\p{Symbol}]/gu, '').trim().toLowerCase()));
+        if (match) {
+            formattedTag = match;
+        } else {
+            formattedTag = formattedTag.replace(/[\p{Emoji}\p{Symbol}]/gu, '').trim();
         }
 
         if (formattedTag && !tags.includes(formattedTag)) {
@@ -63,6 +65,7 @@ export default function DeckTagInput({ tags, onTagsChange, placeholder = "Add ta
     return (
         <div ref={containerRef} style={{ position: 'relative', marginBottom: '15px' }}>
             <div
+                className="deck-tag-input-container"
                 onClick={() => inputRef.current?.focus()}
                 style={{
                     display: 'flex',
@@ -72,13 +75,17 @@ export default function DeckTagInput({ tags, onTagsChange, placeholder = "Add ta
                     background: '#333',
                     borderRadius: '8px',
                     minHeight: '42px',
-                    border: '1px solid #444'
+                    border: '1px solid #444',
+                    cursor: 'text'
                 }}
             >
-                {tags.map((tag, index) => (
+                {tags.map((tag, index) => {
+                    const Icon = getTagIcon(tag);
+                    const label = getTagLabel(tag);
+                    return (
                     <span key={index} style={{
-                        background: 'rgba(75, 255, 179, 0.2)',
-                        color: 'var(--accent-green)',
+                        background: TAG_WARM_BG,
+                        color: 'white',
                         padding: '4px 8px',
                         borderRadius: '12px',
                         display: 'flex',
@@ -87,19 +94,21 @@ export default function DeckTagInput({ tags, onTagsChange, placeholder = "Add ta
                         fontSize: '0.8rem',
                         userSelect: 'none'
                     }}>
-                        {tag}
+                        <Icon size={14} style={{ flexShrink: 0 }} aria-hidden />
+                        {label}
                         <button
                             onClick={(e) => { e.stopPropagation(); removeTag(index); }}
-                            style={{ background: 'none', border: 'none', color: '#4bffb3', cursor: 'pointer', padding: 0, fontSize: '1rem', lineHeight: 1 }}
+                            style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', padding: 0, fontSize: '1rem', lineHeight: 1 }}
                         >
                             ×
                         </button>
                     </span>
-                ))}
+                );})}
 
                 <input
                     ref={inputRef}
                     type="text"
+                    className="deck-tag-input-field"
                     value={inputValue}
                     onChange={(e) => {
                         setInputValue(e.target.value);
@@ -115,8 +124,10 @@ export default function DeckTagInput({ tags, onTagsChange, placeholder = "Add ta
                         color: 'white',
                         flex: 1,
                         minWidth: '60px',
+                        minHeight: '26px',
                         outline: 'none',
-                        fontSize: '0.9rem'
+                        fontSize: '0.9rem',
+                        cursor: 'text'
                     }}
                 />
             </div>
@@ -147,7 +158,9 @@ export default function DeckTagInput({ tags, onTagsChange, placeholder = "Add ta
                                 <div style={{ padding: '8px 12px', fontSize: '0.7rem', color: '#888', textTransform: 'uppercase', fontWeight: 'bold', background: '#222' }}>
                                     {category}
                                 </div>
-                                {filteredItems.map(item => (
+                                {filteredItems.map(item => {
+                                    const ItemIcon = getTagIcon(item);
+                                    return (
                                     <div
                                         key={item}
                                         onClick={() => addTag(item)}
@@ -156,21 +169,25 @@ export default function DeckTagInput({ tags, onTagsChange, placeholder = "Add ta
                                             cursor: 'pointer',
                                             fontSize: '0.9rem',
                                             color: '#ddd',
-                                            borderBottom: '1px solid #333'
+                                            borderBottom: '1px solid #333',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '8px'
                                         }}
                                         onMouseEnter={(e) => e.currentTarget.style.background = '#333'}
                                         onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                                     >
+                                        <ItemIcon size={16} style={{ flexShrink: 0, color: 'var(--primary)' }} aria-hidden />
                                         {item}
                                     </div>
-                                ))}
+                                );})}
                             </div>
                         );
                     })}
                 </div>
             )}
             {tags.length >= 5 && (
-                <div style={{ fontSize: '0.75rem', color: 'var(--accent-red)', marginTop: '4px' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--destructive)', marginTop: '4px' }}>
                     Max 5 tags allowed.
                 </div>
             )}

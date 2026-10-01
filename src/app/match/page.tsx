@@ -4,7 +4,8 @@ import { useSearchParams } from 'next/navigation';
 import { getMovies, Movie } from '@/lib/data';
 import { getWatchLink, fetchDetails } from '@/services/tmdb';
 import Link from 'next/link';
-import { Suspense, useEffect, useState } from 'react';
+import { Play } from 'lucide-react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useUser } from '@/context/UserContext';
 import BackButton from '@/components/ui/BackButton';
@@ -80,41 +81,54 @@ function MatchContent() {
         return watchData.link || `https://www.${provider}.com/search?q=watch+${query}`;
     };
 
-    if (!movie) return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading match details...</div>;
+    if (!movie) {
+        return (
+            <div className="min-h-screen bg-[var(--background)] text-[var(--foreground)] flex items-center justify-center">
+                <p className="text-[var(--muted-foreground)]">Loading match details...</p>
+            </div>
+        );
+    }
 
     const title = language === 'es' && movie.title_es ? movie.title_es : movie.title;
     const finalLink = getDirectLink();
     const providerDisplay = watchData.providerName || (language === 'es' ? 'Streaming' : 'Streaming');
 
     return (
-        <div className="container" style={{ textAlign: 'center', justifyContent: 'center', height: '100vh', padding: '40px 20px', position: 'relative' }}>
-            {/* Absolute Back Button */}
-            <BackButton href="/" className="absolute top-5 left-5" />
+        <div className="min-h-screen bg-[var(--background)] text-[var(--foreground)] flex flex-col items-center justify-center p-6 relative">
+            <BackButton href="/" className="absolute top-5 left-5 z-10" />
 
-            <div className="animate-pop-in">
-                <h1 style={{ fontFamily: 'Brush Script MT, cursive', fontSize: '4rem', color: 'var(--accent-green)', marginBottom: '20px', transform: 'rotate(-5deg)' }}>
+            <div className="animate-pop-in text-center max-w-md w-full">
+                <h1 className="text-5xl font-black text-[var(--secondary)] mb-5 -rotate-[5deg] italic" style={{ fontFamily: 'Brush Script MT, cursive' }}>
                     {t.itsAMatch}
                 </h1>
 
-                <div style={{ position: 'relative', width: '200px', height: '300px', margin: '0 auto 30px', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 0 40px rgba(75, 255, 179, 0.4)' }}>
-                    <img src={movie.image} alt={title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <div className="relative w-[200px] h-[300px] mx-auto mb-8 rounded-2xl overflow-hidden shadow-[var(--shadow-neon-cyan)]">
+                    <img src={movie.image} alt={title} className="w-full h-full object-cover" />
                 </div>
 
-                <h2 style={{ fontSize: '2rem', marginBottom: '10px' }}>{title}</h2>
-                <p style={{ color: '#888', marginBottom: '40px' }}>{movie.year} • {movie.rating}/10</p>
+                <h2 className="text-2xl font-bold mb-2 text-[var(--foreground)]">{title}</h2>
+                <p className="text-[var(--muted-foreground)] mb-8">{movie.year} • {movie.rating}/10</p>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                <div className="flex flex-col gap-4">
                     {finalLink ? (
-                        <a href={finalLink} target="_blank" rel="noopener noreferrer" className="btn-primary" style={{ background: 'white', color: 'black', textDecoration: 'none' }}>
-                            ▶ {language === 'es' ? 'Ver en' : 'Watch on'} {providerDisplay}
+                        <a
+                            href={finalLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center justify-center w-full py-4 rounded-2xl bg-[var(--secondary)] text-[var(--background)] font-bold shadow-[var(--shadow-neon-cyan)] hover:brightness-110 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)]"
+                        >
+                            <Play size={18} className="inline-block mr-1.5 -mt-0.5" aria-hidden /> {language === 'es' ? 'Ver en' : 'Watch on'} {providerDisplay}
                         </a>
                     ) : (
-                        <div style={{ padding: '15px', border: '1px dashed #666', borderRadius: '8px', color: '#888' }}>
+                        <div className="py-4 px-4 border-2 border-dashed border-[var(--border)] rounded-xl text-[var(--muted-foreground)]">
                             {language === 'es' ? 'No disponible en tus plataformas' : 'Not available on your platforms'}
                         </div>
                     )}
 
-                    <Link href="/" style={{ marginTop: '20px', color: '#666', fontSize: '0.9rem' }}>
+                    <Link
+                        href="/"
+                        className="mt-2 text-[var(--muted-foreground)] text-sm font-medium hover:text-[var(--foreground)] transition-colors"
+                    >
                         {t.keepPlaying}
                     </Link>
                 </div>
@@ -125,7 +139,11 @@ function MatchContent() {
 
 export default function MatchPage() {
     return (
-        <Suspense fallback={<div>Loading...</div>}>
+        <Suspense fallback={
+            <div className="min-h-screen bg-[var(--background)] flex items-center justify-center">
+                <p className="text-[var(--muted-foreground)]">Loading...</p>
+            </div>
+        }>
             <MatchContent />
         </Suspense>
     );

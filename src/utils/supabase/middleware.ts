@@ -1,11 +1,14 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-// Rutas públicas que no requieren autenticación
-const PUBLIC_ROUTES = ['/', '/auth/login', '/auth/register', '/auth/callback']
+// Rutas exactas visibles sin sesión
+const PUBLIC_ROUTES = ['/']
 
-// Rutas de autenticación
-const AUTH_ROUTES = ['/auth/login', '/auth/register', '/auth/callback']
+// Prefijos visibles sin sesión: auth, barajas compartidas por enlace y el proxy de JustWatch
+const PUBLIC_PREFIXES = ['/auth', '/deck/', '/api/justwatch']
+
+// Rutas de autenticación (un usuario con sesión no necesita verlas)
+const AUTH_ROUTES = ['/auth/login', '/auth/register']
 
 export async function updateSession(request: NextRequest) {
     let supabaseResponse = NextResponse.next({
@@ -21,7 +24,7 @@ export async function updateSession(request: NextRequest) {
                     return request.cookies.getAll()
                 },
                 setAll(cookiesToSet) {
-                    cookiesToSet.forEach(({ name, value, options }) =>
+                    cookiesToSet.forEach(({ name, value }) =>
                         request.cookies.set(name, value)
                     )
                     supabaseResponse = NextResponse.next({
@@ -46,11 +49,6 @@ export async function updateSession(request: NextRequest) {
 
     const path = request.nextUrl.pathname
 
-    // Logging para debugging en desarrollo
-    if (process.env.NODE_ENV === 'development') {
-        console.log(`[Middleware] Path: ${path}, User: ${user ? user.id : 'none'}`)
-    }
-
     // Si hay error de autenticación pero no es crítico, continuar
     if (authError && authError.message !== 'JWT expired') {
         if (process.env.NODE_ENV === 'development') {
@@ -58,16 +56,19 @@ export async function updateSession(request: NextRequest) {
         }
     }
 
-    // Redirigir usuarios autenticados que intentan acceder a rutas de auth
-    if (AUTH_ROUTES.includes(path) && user) {
+    // Redirigir usuarios con cuenta que intentan acceder al login.
+    // Los invitados sí pueden entrar al login/registro para crear su cuenta.
+    if (AUTH_ROUTES.includes(path) && user && !user.is_anonymous) {
         return NextResponse.redirect(new URL('/', request.url))
     }
 
-    // Proteger rutas privadas: si no hay usuario y no es ruta pública, redirigir a login
-    const isPublicRoute = PUBLIC_ROUTES.includes(path) || path.startsWith('/auth')
-    
+    // Proteger rutas privadas: sin sesión → login, recordando a dónde volver
+    const isPublicRoute = PUBLIC_ROUTES.includes(path) || PUBLIC_PREFIXES.some(p => path.startsWith(p))
+
     if (!user && !isPublicRoute) {
-        return NextResponse.redirect(new URL('/auth/login', request.url))
+        const loginUrl = new URL('/auth/login', request.url)
+        loginUrl.searchParams.set('redirect', path + request.nextUrl.search)
+        return NextResponse.redirect(loginUrl)
     }
 
     return supabaseResponse

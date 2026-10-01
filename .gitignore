@@ -64,3 +64,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Internal docs / tooling (not part of the public repo)
+.claude/
+CLAUDE.md
+PROYECTO.md
+*.docx
+START_SERVER_AS_ADMIN.bat
