@@ -1,334 +1,221 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, ReactNode } from 'react';
 import { useAuth } from '@/context/AuthProvider';
-import { getWatchLink } from '@/services/tmdb';
+import { useLanguage } from '@/context/LanguageContext';
+import { useToast } from '@/components/ui/Toast';
 import { supabase } from '@/lib/supabase';
-
-export type ContentType = 'movie' | 'tv';
+import { readArray, removeKey, writeJSON } from '@/lib/storage';
+import { getUserRegion } from '@/lib/region';
+import { withWatchInfo } from '@/services/tmdb';
+import type { ContentType, LibraryMovie, Movie, UserLibraryRow } from '@/types';
 
 interface UserContextType {
-    user: { email: string; id: string } | null;
     platforms: string[];
     contentTypes: ContentType[];
     preferredGenres: string[];
-    login: (email: string) => void;
-    logout: () => void;
     updatePlatforms: (platforms: string[]) => void;
-    toggleContentType: (type: ContentType) => void;
+    updateContentTypes: (types: ContentType[]) => void;
     updatePreferredGenres: (genres: string[]) => void;
-    likedContent: any[];
-    addLike: (movie: any) => void;
-    updateLike: (movie: any) => void;
-    removeLike: (movieId: string) => void;
+    /** Videoteca del usuario (más recientes primero) */
+    likedContent: LibraryMovie[];
+    addLike: (movie: Movie) => Promise<void>;
+    updateLike: (movie: LibraryMovie) => Promise<void>;
+    removeLike: (movieId: string) => Promise<void>;
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
 
+/** Claves de localStorage siempre ligadas al usuario (caché para pintar al instante) */
+const keys = (userId: string) => ({
+    platforms: `cinematch_platforms_${userId}`,
+    contentTypes: `cinematch_content_types_${userId}`,
+    genres: `cinematch_preferred_genres_${userId}`,
+    likes: `cinematch_likes_${userId}`,
+});
+
+/** Claves antiguas sin usuario: podían filtrar datos de una cuenta a otra en el mismo navegador */
+const LEGACY_KEYS = ['cinematch_platforms', 'cinematch_content_types', 'cinematch_preferred_genres', 'cinematch_likes'];
+
+type PrefsPatch = {
+    preferred_platforms?: string[];
+    preferred_content_types?: ContentType[];
+    preferred_genres?: string[];
+};
+
 export function UserProvider({ children }: { children: ReactNode }) {
-    const { user: authUser, signOut: authSignOut } = useAuth();
+    const { user } = useAuth();
+    const { t } = useLanguage();
+    const { showToast } = useToast();
+    const userId = user?.id ?? null;
 
     const [platforms, setPlatforms] = useState<string[]>([]);
     const [contentTypes, setContentTypes] = useState<ContentType[]>([]);
     const [preferredGenres, setPreferredGenres] = useState<string[]>([]);
-    const [likedContent, setLikedContent] = useState<any[]>([]);
-    const [prefsLoaded, setPrefsLoaded] = useState(false);
+    const [likedContent, setLikedContent] = useState<LibraryMovie[]>([]);
 
-    const router = useRouter();
+    // Espejos síncronos del estado: evitan carreras con toques muy rápidos
+    const platformsRef = useRef<string[]>([]);
+    const likedIdsRef = useRef<Set<string>>(new Set());
 
-    // ---------------------------------------------------------------------------
-    // Cargar preferencias: primero localStorage (instantáneo), luego Supabase (sync)
-    // ---------------------------------------------------------------------------
+    // ---------------------------------------------------------------------
+    // Carga inicial: caché local (instantánea) y después Supabase (fuente de verdad)
+    // ---------------------------------------------------------------------
     useEffect(() => {
-        const loadPrefs = async () => {
-            // 1. Carga inmediata desde localStorage para que la UI no espere
-            const storedPlatforms = localStorage.getItem('cinematch_platforms');
-            const storedTypes = localStorage.getItem('cinematch_content_types');
-            const storedGenres = localStorage.getItem('cinematch_preferred_genres');
+        LEGACY_KEYS.forEach(removeKey);
 
-            if (storedPlatforms) setPlatforms(JSON.parse(storedPlatforms));
-            if (storedTypes) {
-                const parsed = JSON.parse(storedTypes);
-                if (Array.isArray(parsed) && parsed.length > 0) setContentTypes(parsed);
-            }
-            if (storedGenres) {
-                const parsed = JSON.parse(storedGenres);
-                if (Array.isArray(parsed)) setPreferredGenres(parsed);
-            }
-
-            // 2. Si hay usuario autenticado, sincronizar con Supabase (fuente de verdad)
-            if (authUser?.id) {
-                try {
-                    const { data, error } = await supabase
-                        .from('profiles')
-                        .select('preferred_platforms, preferred_content_types, preferred_genres')
-                        .eq('id', authUser.id)
-                        .single();
-
-                    if (!error && data) {
-                        if (Array.isArray(data.preferred_platforms) && data.preferred_platforms.length > 0) {
-                            setPlatforms(data.preferred_platforms);
-                            localStorage.setItem('cinematch_platforms', JSON.stringify(data.preferred_platforms));
-                        }
-                        if (Array.isArray(data.preferred_content_types) && data.preferred_content_types.length > 0) {
-                            setContentTypes(data.preferred_content_types as ContentType[]);
-                            localStorage.setItem('cinematch_content_types', JSON.stringify(data.preferred_content_types));
-                        }
-                        if (Array.isArray(data.preferred_genres)) {
-                            setPreferredGenres(data.preferred_genres);
-                            localStorage.setItem('cinematch_preferred_genres', JSON.stringify(data.preferred_genres));
-                        }
-                    }
-                } catch (err) {
-                    console.error('Error loading preferences from Supabase:', err);
-                    // Fallback a localStorage ya aplicado arriba
-                }
-            }
-
-            setPrefsLoaded(true);
+        let cancelled = false;
+        const apply = (next: { platforms: string[]; types: ContentType[]; genres: string[]; likes: LibraryMovie[] }) => {
+            if (cancelled) return;
+            platformsRef.current = next.platforms;
+            likedIdsRef.current = new Set(next.likes.map(m => String(m.id)));
+            setPlatforms(next.platforms);
+            setContentTypes(next.types);
+            setPreferredGenres(next.genres);
+            setLikedContent(next.likes);
         };
 
-        loadPrefs();
-    }, [authUser?.id]);
+        if (!userId) {
+            apply({ platforms: [], types: [], genres: [], likes: [] });
+            return () => { cancelled = true; };
+        }
 
-    // ---------------------------------------------------------------------------
-    // Cargar videoteca desde Supabase (con fallback y migración desde localStorage)
-    // ---------------------------------------------------------------------------
-    useEffect(() => {
-        const loadLibrary = async () => {
-            if (authUser?.id) {
-                try {
-                    const { data, error } = await supabase
-                        .from('user_library')
-                        .select('movie_data, added_at')
-                        .eq('user_id', authUser.id)
-                        .order('added_at', { ascending: false });
-
-                    if (error) {
-                        console.error('Error loading library from Supabase:', error);
-                        const storedLikes = localStorage.getItem('cinematch_likes');
-                        if (storedLikes) {
-                            setLikedContent(JSON.parse(storedLikes));
-                            migrateLocalStorageToSupabase(JSON.parse(storedLikes));
-                        }
-                    } else if (data) {
-                        const movies = data.map((item: any) => item.movie_data);
-                        setLikedContent(movies);
-
-                        // Migrar localStorage a Supabase si hay datos locales (solo una vez)
-                        const storedLikes = localStorage.getItem('cinematch_likes');
-                        const migrationKey = `cinematch_library_migrated_${authUser.id}`;
-                        if (storedLikes && !localStorage.getItem(migrationKey)) {
-                            const localMovies = JSON.parse(storedLikes);
-                            await migrateLocalStorageToSupabase(localMovies);
-                            localStorage.setItem(migrationKey, 'true');
-                        }
-                    }
-                } catch (error) {
-                    console.error('Error loading library:', error);
-                    const storedLikes = localStorage.getItem('cinematch_likes');
-                    if (storedLikes) setLikedContent(JSON.parse(storedLikes));
-                }
-            } else {
-                const storedLikes = localStorage.getItem('cinematch_likes');
-                if (storedLikes) setLikedContent(JSON.parse(storedLikes));
-            }
+        const k = keys(userId);
+        const cached = {
+            platforms: readArray<string>(k.platforms),
+            types: readArray<ContentType>(k.contentTypes),
+            genres: readArray<string>(k.genres),
+            likes: readArray<LibraryMovie>(k.likes),
         };
+        apply(cached);
 
-        loadLibrary();
-    }, [authUser?.id]);
+        void Promise.all([
+            supabase.from('profiles').select('preferred_platforms, preferred_content_types, preferred_genres').eq('id', userId).maybeSingle(),
+            supabase.from('user_library').select('movie_id, movie_data, added_at').eq('user_id', userId).order('added_at', { ascending: false }),
+        ]).then(([prefsRes, libraryRes]) => {
+            if (cancelled) return;
+            const prefs = prefsRes.data;
+            const library = (libraryRes.data ?? []) as UserLibraryRow[];
+            apply({
+                platforms: prefs?.preferred_platforms?.length ? prefs.preferred_platforms : cached.platforms,
+                types: prefs?.preferred_content_types?.length ? (prefs.preferred_content_types as ContentType[]) : cached.types,
+                genres: Array.isArray(prefs?.preferred_genres) ? prefs.preferred_genres : cached.genres,
+                likes: libraryRes.error ? cached.likes : library.map(row => ({ ...row.movie_data, added_at: row.added_at })),
+            });
+            if (prefsRes.error || libraryRes.error) console.error('Error syncing user data:', prefsRes.error ?? libraryRes.error);
+        });
 
-    // ---------------------------------------------------------------------------
-    // Migración one-shot: localStorage -> Supabase
-    // ---------------------------------------------------------------------------
-    const migrateLocalStorageToSupabase = async (localMovies: any[]) => {
-        if (!authUser?.id || localMovies.length === 0) return;
-        try {
-            const { data: existing } = await supabase
-                .from('user_library')
-                .select('movie_id')
-                .eq('user_id', authUser.id);
+        return () => { cancelled = true; };
+    }, [userId]);
 
-            const existingIds = new Set(existing?.map((e: any) => e.movie_id) || []);
-            const toInsert = localMovies
-                .filter(m => m.id && !existingIds.has(m.id.toString()))
-                .map(movie => ({
-                    user_id: authUser.id,
-                    movie_id: movie.id.toString(),
-                    movie_data: movie
-                }));
+    // Caché local de la videoteca
+    useEffect(() => {
+        if (userId) writeJSON(keys(userId).likes, likedContent);
+    }, [userId, likedContent]);
 
-            if (toInsert.length > 0) {
-                const { error } = await supabase.from('user_library').insert(toInsert);
-                if (error) {
-                    console.error('Error migrating library to Supabase:', error);
-                } else {
-                }
-            }
-        } catch (error) {
-            console.error('Error in migration:', error);
+    // ---------------------------------------------------------------------
+    // Preferencias
+    // ---------------------------------------------------------------------
+    const savePrefs = useCallback(async (patch: PrefsPatch) => {
+        if (!userId) return;
+        const k = keys(userId);
+        if (patch.preferred_platforms) writeJSON(k.platforms, patch.preferred_platforms);
+        if (patch.preferred_content_types) writeJSON(k.contentTypes, patch.preferred_content_types);
+        if (patch.preferred_genres) writeJSON(k.genres, patch.preferred_genres);
+
+        // upsert: si el perfil aún no existe, update() no guardaría nada sin avisar
+        const { error } = await supabase.from('profiles').upsert({ id: userId, ...patch });
+        if (error) {
+            console.error('Error saving preferences:', error.message);
+            showToast(t.genericError, 'error');
         }
-    };
+    }, [userId, showToast, t.genericError]);
 
-    // ---------------------------------------------------------------------------
-    // Helper: guardar preferencias en Supabase
-    // ---------------------------------------------------------------------------
-    const savePrefsToSupabase = async (updates: {
-        preferred_platforms?: string[];
-        preferred_content_types?: string[];
-        preferred_genres?: string[];
-    }) => {
-        if (!authUser?.id) return;
-        try {
-            const { error } = await supabase
-                .from('profiles')
-                .update(updates)
-                .eq('id', authUser.id);
-            if (error) console.error('Error saving preferences to Supabase:', error);
-        } catch (err) {
-            console.error('Error saving preferences:', err);
-        }
-    };
+    const updatePlatforms = useCallback((next: string[]) => {
+        platformsRef.current = next;
+        setPlatforms(next);
+        void savePrefs({ preferred_platforms: next });
+    }, [savePrefs]);
 
-    // ---------------------------------------------------------------------------
-    // Métodos del contexto
-    // ---------------------------------------------------------------------------
-    const login = (_email: string) => {
-        router.push('/auth/login');
-    };
+    const updateContentTypes = useCallback((next: ContentType[]) => {
+        if (next.length === 0) return; // siempre al menos un tipo
+        setContentTypes(next);
+        void savePrefs({ preferred_content_types: next });
+    }, [savePrefs]);
 
-    const logout = async () => {
-        await authSignOut();
-        router.push('/auth/login');
-    };
-
-    const updatePlatforms = (newPlatforms: string[]) => {
-        setPlatforms(newPlatforms);
-        localStorage.setItem('cinematch_platforms', JSON.stringify(newPlatforms));
-        savePrefsToSupabase({ preferred_platforms: newPlatforms });
-    };
-
-    const toggleContentType = (type: ContentType) => {
-        let newTypes: ContentType[];
-        if (contentTypes.includes(type)) {
-            if (contentTypes.length === 1) return;
-            newTypes = contentTypes.filter(t => t !== type);
-        } else {
-            newTypes = [...contentTypes, type];
-        }
-        setContentTypes(newTypes);
-        localStorage.setItem('cinematch_content_types', JSON.stringify(newTypes));
-        savePrefsToSupabase({ preferred_content_types: newTypes });
-    };
-
-    const updatePreferredGenres = async (genres: string[]) => {
+    const updatePreferredGenres = useCallback((genres: string[]) => {
         setPreferredGenres(genres);
-        localStorage.setItem('cinematch_preferred_genres', JSON.stringify(genres));
-        savePrefsToSupabase({ preferred_genres: genres });
-    };
+        void savePrefs({ preferred_genres: genres });
+    }, [savePrefs]);
 
-    // ---------------------------------------------------------------------------
-    // Videoteca: likes
-    // ---------------------------------------------------------------------------
-    const addLike = async (movie: any) => {
-        if (likedContent.some(m => m.id === movie.id)) return;
+    // ---------------------------------------------------------------------
+    // Videoteca
+    // ---------------------------------------------------------------------
+    const updateLike = useCallback(async (movie: LibraryMovie) => {
+        setLikedContent(prev => prev.map(m => (String(m.id) === String(movie.id) ? movie : m)));
+        if (!userId) return;
+        const { error } = await supabase
+            .from('user_library')
+            .update({ movie_data: movie })
+            .eq('user_id', userId)
+            .eq('movie_id', String(movie.id));
+        if (error) console.error('Error updating library item:', error.message);
+    }, [userId]);
 
-        const tempLike = { ...movie, added_at: new Date().toISOString() };
-        setLikedContent(prev => {
-            const newLikes = [...prev, tempLike];
-            localStorage.setItem('cinematch_likes', JSON.stringify(newLikes));
-            return newLikes;
-        });
+    const addLike = useCallback(async (movie: Movie) => {
+        const id = String(movie.id);
+        if (!userId || likedIdsRef.current.has(id)) return;
+        likedIdsRef.current.add(id);
 
-        // Enriquecer con datos de plataforma si faltan
-        let enrichedMovie = { ...tempLike };
-        if (!movie.providers && !movie.providerName && movie.id) {
-            try {
-                const { link, providerName, providers } = await getWatchLink(
-                    movie.id,
-                    movie.type || 'movie',
-                    platforms
-                );
-                enrichedMovie = {
-                    ...enrichedMovie,
-                    providerName: providerName || undefined,
-                    watchLink: link || undefined,
-                    providers: providers || []
-                };
-                setLikedContent(prev => {
-                    const updated = prev.map(m => m.id === movie.id ? enrichedMovie : m);
-                    localStorage.setItem('cinematch_likes', JSON.stringify(updated));
-                    return updated;
-                });
-            } catch (error) {
-                console.error('Error obteniendo información de plataforma:', error);
-            }
+        const liked: LibraryMovie = { ...movie, id, added_at: new Date().toISOString() };
+        setLikedContent(prev => [liked, ...prev]);
+
+        // Se guarda primero con lo que hay; las plataformas se añaden después con un update.
+        // Así un "quitar" inmediato nunca compite con un insert retrasado.
+        const { error } = await supabase
+            .from('user_library')
+            .upsert({ user_id: userId, movie_id: id, movie_data: liked }, { onConflict: 'user_id,movie_id', ignoreDuplicates: true });
+        if (error) {
+            likedIdsRef.current.delete(id);
+            setLikedContent(prev => prev.filter(m => String(m.id) !== id));
+            showToast(t.genericError, 'error');
+            return;
         }
 
-        if (authUser?.id && movie.id) {
-            try {
-                const { error } = await supabase
-                    .from('user_library')
-                    .insert({
-                        user_id: authUser.id,
-                        movie_id: movie.id.toString(),
-                        movie_data: enrichedMovie
-                    });
-                if (error) console.error('Error saving to Supabase:', error);
-            } catch (error) {
-                console.error('Error saving library item:', error);
-            }
+        if (!liked.providers?.length) {
+            const enriched = await withWatchInfo(liked, getUserRegion(), platformsRef.current);
+            if (likedIdsRef.current.has(id) && enriched.providers?.length) await updateLike(enriched);
         }
-    };
+    }, [userId, showToast, t.genericError, updateLike]);
 
-    const updateLike = (movie: any) => {
+    const removeLike = useCallback(async (movieId: string) => {
+        const id = String(movieId);
+        if (!userId) return;
+        let removed: LibraryMovie | undefined;
+        likedIdsRef.current.delete(id);
         setLikedContent(prev => {
-            const newLikes = prev.map(m => m.id === movie.id ? movie : m);
-            localStorage.setItem('cinematch_likes', JSON.stringify(newLikes));
-            return newLikes;
-        });
-    };
-
-    const removeLike = async (movieId: string) => {
-        setLikedContent(prev => {
-            const newLikes = prev.filter(m => m.id !== movieId);
-            localStorage.setItem('cinematch_likes', JSON.stringify(newLikes));
-            return newLikes;
+            removed = prev.find(m => String(m.id) === id);
+            return prev.filter(m => String(m.id) !== id);
         });
 
-        if (authUser?.id) {
-            try {
-                const { error } = await supabase
-                    .from('user_library')
-                    .delete()
-                    .eq('user_id', authUser.id)
-                    .eq('movie_id', movieId);
-                if (error) console.error('Error deleting from Supabase:', error);
-            } catch (error) {
-                console.error('Error deleting library item:', error);
+        const { error } = await supabase.from('user_library').delete().eq('user_id', userId).eq('movie_id', id);
+        if (error) {
+            if (removed) {
+                const restored = removed;
+                likedIdsRef.current.add(id);
+                setLikedContent(prev => [restored, ...prev]);
             }
+            showToast(t.genericError, 'error');
         }
-    };
+    }, [userId, showToast, t.genericError]);
 
-    // ---------------------------------------------------------------------------
-    // Adapter: mapear authUser al interface esperado por consumidores
-    // ---------------------------------------------------------------------------
-    // Los invitados (usuarios anónimos) no tienen email
-    const adaptedUser = authUser
-        ? { email: authUser.email ?? '', id: authUser.id }
-        : null;
+    const value = useMemo<UserContextType>(() => ({
+        platforms, contentTypes, preferredGenres,
+        updatePlatforms, updateContentTypes, updatePreferredGenres,
+        likedContent, addLike, updateLike, removeLike,
+    }), [platforms, contentTypes, preferredGenres, updatePlatforms, updateContentTypes, updatePreferredGenres, likedContent, addLike, updateLike, removeLike]);
 
-    return (
-        <UserContext.Provider value={{
-            user: adaptedUser,
-            platforms, contentTypes, preferredGenres,
-            login, logout, updatePlatforms, toggleContentType, updatePreferredGenres,
-            likedContent, addLike, removeLike, updateLike
-        }}>
-            {children}
-        </UserContext.Provider>
-    );
+    return <UserContext.Provider value={value}>{children}</UserContext.Provider>;
 }
 
 export function useUser() {

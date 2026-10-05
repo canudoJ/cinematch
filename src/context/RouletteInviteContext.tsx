@@ -1,202 +1,129 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from './AuthProvider';
 import { useLobby } from './LobbyContext';
-import { useRouter } from 'next/navigation';
+import { fetchProfilesMap } from '@/lib/friends';
+import type { RouletteInvitationRow } from '@/types';
 
-interface PendingInvite {
-  id: string;
-  lobby_id: string;
-  sender_name: string;
+export interface PendingInvite {
+    id: string;
+    lobbyId: string;
+    senderName: string;
 }
 
 interface RouletteInviteContextType {
-  pendingInvite: PendingInvite | null;
-  dismissInvite: () => void;
+    /** Invitación que se está mostrando (la más antigua de la cola) */
+    currentInvite: PendingInvite | null;
+    acceptInvite: () => Promise<void>;
+    declineInvite: () => Promise<void>;
+    /** El anfitrión invita a amigos a su sala */
+    sendInvites: (friendIds: string[]) => Promise<boolean>;
 }
 
 const RouletteInviteContext = createContext<RouletteInviteContextType | undefined>(undefined);
 
+/** Las invitaciones más antiguas que esto ya no tienen sentido (la partida habrá terminado) */
+const INVITE_MAX_AGE_MS = 30 * 60 * 1000;
+
+async function toInvites(rows: RouletteInvitationRow[]): Promise<PendingInvite[]> {
+    const senders = await fetchProfilesMap(rows.map(r => r.sender_id));
+    return rows.map(r => ({ id: r.id, lobbyId: r.lobby_id, senderName: senders.get(r.sender_id)?.username ?? '' }));
+}
+
 export function RouletteInviteProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
-  const router = useRouter();
-  const { joinLobby } = useLobby();
-  const [pendingInvite, setPendingInvite] = useState<PendingInvite | null>(null);
+    const { user } = useAuth();
+    const router = useRouter();
+    const { lobbyId, joinLobbyById, leaveLobby } = useLobby();
+    const userId = user?.id ?? null;
+    const [queue, setQueue] = useState<{ owner: string | null; invites: PendingInvite[] }>({ owner: null, invites: [] });
 
-  useEffect(() => {
-    if (!user?.id) return;
+    const enqueue = useCallback((owner: string, invites: PendingInvite[]) => {
+        setQueue(prev => {
+            const base = prev.owner === owner ? prev.invites : [];
+            const known = new Set(base.map(i => i.id));
+            return { owner, invites: [...base, ...invites.filter(i => !known.has(i.id))] };
+        });
+    }, []);
 
-    const channel = supabase
-      .channel('roulette-invites-' + user.id)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'roulette_invitations',
-          filter: `receiver_id=eq.${user.id}`
-        },
-        async (payload) => {
-          const row: any = payload.new;
-          if (row.status !== 'pending') return;
+    useEffect(() => {
+        if (!userId) return;
+        let cancelled = false;
 
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('username')
-            .eq('id', row.sender_id)
-            .single();
+        // Invitaciones recibidas mientras no estaba conectado
+        void supabase
+            .from('roulette_invitations')
+            .select('id, lobby_id, sender_id, receiver_id, status, created_at')
+            .eq('receiver_id', userId)
+            .eq('status', 'pending')
+            .gte('created_at', new Date(Date.now() - INVITE_MAX_AGE_MS).toISOString())
+            .order('created_at', { ascending: true })
+            .then(async ({ data }) => {
+                const invites = await toInvites((data ?? []) as RouletteInvitationRow[]);
+                if (!cancelled) enqueue(userId, invites);
+            });
 
-          setPendingInvite({
-            id: row.id,
-            lobby_id: row.lobby_id,
-            sender_name: profile?.username || 'Un amigo'
-          });
-        }
-      )
-      .subscribe();
+        const channel = supabase
+            .channel(`roulette-invites-${userId}`)
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'roulette_invitations', filter: `receiver_id=eq.${userId}` },
+                async payload => {
+                    const row = payload.new as RouletteInvitationRow;
+                    if (row.status !== 'pending') return;
+                    const invites = await toInvites([row]);
+                    if (!cancelled) enqueue(userId, invites);
+                })
+            .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user?.id, joinLobby]);
+        return () => {
+            cancelled = true;
+            void supabase.removeChannel(channel);
+        };
+    }, [userId, enqueue]);
 
-  const handleAccept = async () => {
-    if (!pendingInvite || !user?.id) return;
-    try {
-      // Marcar invitación como aceptada
-      const { error: updateError } = await supabase
-        .from('roulette_invitations')
-        .update({ status: 'accepted' })
-        .eq('id', pendingInvite.id)
-        .eq('receiver_id', user.id);
+    const invites = queue.owner === userId ? queue.invites : [];
+    const currentInvite = invites[0] ?? null;
 
-      if (updateError) {
-        console.error('Error updating roulette invite status', updateError);
-      }
+    const respond = useCallback(async (invite: PendingInvite, status: 'accepted' | 'declined') => {
+        setQueue(prev => ({ ...prev, invites: prev.invites.filter(i => i.id !== invite.id) }));
+        if (!userId) return;
+        await supabase.from('roulette_invitations').update({ status }).eq('id', invite.id).eq('receiver_id', userId);
+    }, [userId]);
 
-      // Unirse al lobby (esto registra al usuario como miembro y abre el canal Realtime)
-      await joinLobby(pendingInvite.lobby_id);
+    const acceptInvite = useCallback(async () => {
+        if (!currentInvite) return;
+        const invite = currentInvite;
+        await respond(invite, 'accepted');
+        if (lobbyId && lobbyId !== invite.lobbyId) await leaveLobby();
+        if (await joinLobbyById(invite.lobbyId)) router.push('/roulette-lobby');
+    }, [currentInvite, respond, lobbyId, leaveLobby, joinLobbyById, router]);
 
-      // Guardar en localStorage por si la navegación se pierde por cualquier razón
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem('lastRouletteLobbyId', pendingInvite.lobby_id);
-      }
+    const declineInvite = useCallback(async () => {
+        if (currentInvite) await respond(currentInvite, 'declined');
+    }, [currentInvite, respond]);
 
-      setPendingInvite(null);
+    const sendInvites = useCallback(async (friendIds: string[]) => {
+        if (!userId || !lobbyId || friendIds.length === 0) return false;
+        const { error } = await supabase.from('roulette_invitations').insert(
+            friendIds.map(receiverId => ({ lobby_id: lobbyId, sender_id: userId, receiver_id: receiverId, status: 'pending' })),
+        );
+        if (error) console.error('Error sending roulette invitations:', error.message);
+        return !error;
+    }, [userId, lobbyId]);
 
-      // Forzar navegación al lobby
-      router.push('/roulette-lobby');
-      if (typeof window !== 'undefined') {
-        // Fallback duro por si el router tarda o falla
-        window.setTimeout(() => {
-          window.location.assign('/roulette-lobby');
-        }, 50);
-      }
-    } catch (error) {
-      console.error('Error accepting roulette invite', error);
-    }
-  };
+    const value = useMemo(
+        () => ({ currentInvite, acceptInvite, declineInvite, sendInvites }),
+        [currentInvite, acceptInvite, declineInvite, sendInvites],
+    );
 
-  const handleDecline = async () => {
-    if (!pendingInvite || !user?.id) return;
-    try {
-      await supabase
-        .from('roulette_invitations')
-        .update({ status: 'declined' })
-        .eq('id', pendingInvite.id)
-        .eq('receiver_id', user.id);
-    } catch (error) {
-      console.error('Error declining roulette invite', error);
-    } finally {
-      setPendingInvite(null);
-    }
-  };
-
-  const dismissInvite = () => setPendingInvite(null);
-
-  return (
-    <RouletteInviteContext.Provider value={{ pendingInvite, dismissInvite }}>
-      {children}
-      {pendingInvite && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.75)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 2200,
-            padding: '20px'
-          }}
-        >
-          <div
-            className="animate-pop-in"
-            style={{
-              background: 'var(--background)',
-              borderRadius: '20px',
-              border: '1px solid var(--secondary)',
-              padding: '24px',
-              maxWidth: '400px',
-              width: '100%',
-              textAlign: 'center',
-              boxShadow: '0 0 30px rgba(0,0,0,0.6)'
-            }}
-          >
-            <h2 className="heading-lg" style={{ marginBottom: '12px' }}>
-              Invitación a Ruleta Rusa
-            </h2>
-            <p style={{ color: '#ddd', marginBottom: '20px' }}>
-              Tu amigo {pendingInvite.sender_name} te ha invitado a jugar al modo ruleta rusa.
-            </p>
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button
-                type="button"
-                onClick={handleDecline}
-                style={{
-                  flex: 1,
-                  padding: '10px',
-                  borderRadius: '12px',
-                  border: '1px solid #444',
-                  background: '#111',
-                  color: 'var(--foreground)',
-                  fontWeight: 600,
-                  cursor: 'pointer'
-                }}
-              >
-                Rechazar
-              </button>
-              <button
-                type="button"
-                onClick={handleAccept}
-                style={{
-                  flex: 1,
-                  padding: '10px',
-                  borderRadius: '12px',
-                  border: 'none',
-                  background: 'var(--secondary)',
-                  color: '#000',
-                  fontWeight: 700,
-                  cursor: 'pointer'
-                }}
-              >
-                Aceptar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </RouletteInviteContext.Provider>
-  );
+    return <RouletteInviteContext.Provider value={value}>{children}</RouletteInviteContext.Provider>;
 }
 
 export function useRouletteInvite() {
-  const ctx = useContext(RouletteInviteContext);
-  if (!ctx) {
-    throw new Error('useRouletteInvite must be used within RouletteInviteProvider');
-  }
-  return ctx;
+    const ctx = useContext(RouletteInviteContext);
+    if (!ctx) {
+        throw new Error('useRouletteInvite must be used within a RouletteInviteProvider');
+    }
+    return ctx;
 }
-

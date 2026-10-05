@@ -1,19 +1,13 @@
-import { createServerClient } from '@supabase/ssr'
-import { NextResponse, type NextRequest } from 'next/server'
+import { createServerClient } from '@supabase/ssr';
+import { NextResponse, type NextRequest } from 'next/server';
+import { isAuthPage, isPublicPath } from '@/lib/routes';
 
-// Rutas exactas visibles sin sesión
-const PUBLIC_ROUTES = ['/']
-
-// Prefijos visibles sin sesión: auth, barajas compartidas por enlace y el proxy de JustWatch
-const PUBLIC_PREFIXES = ['/auth', '/deck/', '/api/justwatch']
-
-// Rutas de autenticación (un usuario con sesión no necesita verlas)
-const AUTH_ROUTES = ['/auth/login', '/auth/register']
-
+/**
+ * Refresca la sesión de Supabase (cookies) y protege las rutas privadas.
+ * Los invitados (usuarios anónimos) cuentan como sesión válida.
+ */
 export async function updateSession(request: NextRequest) {
-    let supabaseResponse = NextResponse.next({
-        request,
-    })
+    let response = NextResponse.next({ request });
 
     const supabase = createServerClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -21,55 +15,31 @@ export async function updateSession(request: NextRequest) {
         {
             cookies: {
                 getAll() {
-                    return request.cookies.getAll()
+                    return request.cookies.getAll();
                 },
                 setAll(cookiesToSet) {
-                    cookiesToSet.forEach(({ name, value }) =>
-                        request.cookies.set(name, value)
-                    )
-                    supabaseResponse = NextResponse.next({
-                        request,
-                    })
-                    cookiesToSet.forEach(({ name, value, options }) =>
-                        supabaseResponse.cookies.set(name, value, options)
-                    )
+                    cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+                    response = NextResponse.next({ request });
+                    cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
                 },
             },
-        }
-    )
+        },
+    );
 
-    // IMPORTANT: Avoid writing any logic between createServerClient and
-    // supabase.auth.getUser(). A simple mistake could make it very hard to debug
-    // issues with users being randomly logged out.
+    // No poner lógica entre createServerClient y getUser(): puede cerrar sesiones al azar
+    const { data: { user } } = await supabase.auth.getUser();
+    const path = request.nextUrl.pathname;
 
-    const {
-        data: { user },
-        error: authError,
-    } = await supabase.auth.getUser()
-
-    const path = request.nextUrl.pathname
-
-    // Si hay error de autenticación pero no es crítico, continuar
-    if (authError && authError.message !== 'JWT expired') {
-        if (process.env.NODE_ENV === 'development') {
-            console.warn('[Middleware] Auth error:', authError.message)
-        }
+    // Quien ya tiene cuenta no necesita login/registro (los invitados sí, para crear la suya)
+    if (user && !user.is_anonymous && isAuthPage(path)) {
+        return NextResponse.redirect(new URL('/', request.url));
     }
 
-    // Redirigir usuarios con cuenta que intentan acceder al login.
-    // Los invitados sí pueden entrar al login/registro para crear su cuenta.
-    if (AUTH_ROUTES.includes(path) && user && !user.is_anonymous) {
-        return NextResponse.redirect(new URL('/', request.url))
+    if (!user && !isPublicPath(path)) {
+        const loginUrl = new URL('/auth/login', request.url);
+        loginUrl.searchParams.set('redirect', path + request.nextUrl.search);
+        return NextResponse.redirect(loginUrl);
     }
 
-    // Proteger rutas privadas: sin sesión → login, recordando a dónde volver
-    const isPublicRoute = PUBLIC_ROUTES.includes(path) || PUBLIC_PREFIXES.some(p => path.startsWith(p))
-
-    if (!user && !isPublicRoute) {
-        const loginUrl = new URL('/auth/login', request.url)
-        loginUrl.searchParams.set('redirect', path + request.nextUrl.search)
-        return NextResponse.redirect(loginUrl)
-    }
-
-    return supabaseResponse
+    return response;
 }

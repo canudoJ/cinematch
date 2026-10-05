@@ -1,401 +1,302 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
-import { useRouter } from 'next/navigation';
-import { ContentType } from './UserContext';
-import type { Movie } from '@/lib/data';
-import { useAuth } from './AuthProvider';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, ReactNode } from 'react';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/context/AuthProvider';
+import { useLanguage } from '@/context/LanguageContext';
+import { useToast } from '@/components/ui/Toast';
+import { randomCode } from '@/lib/random';
+import { readString, removeKey, writeString } from '@/lib/storage';
+import type { VoteRow } from '@/lib/roulette';
+import type { LobbyConfig, LobbyMemberRow, LobbyStatus, Player, RouletteConfig, RouletteLobbyRow } from '@/types';
 
-export interface Player {
-    id: string;
-    name: string;
-    avatar: string;
-    isHost: boolean;
-    status?: 'waiting' | 'accepted' | 'declined' | 'playing';
-}
-
-export interface LobbyConfig {
-    platforms: string[];
-    contentTypes: ContentType[];
-    mode?: 'standard' | 'roulette';
-    // JSON con la configuración completa de ruleta (opcional)
-    rouletteConfig?: any;
-    // Baraja compartida de la ronda actual (para ruleta rusa)
-    roundMovies?: Movie[];
-    // Coincidencias ganadoras de la ronda actual (para la ruleta final)
-    winningMatches?: Movie[];
-    // Rotación final de la ruleta para sincronizar el giro entre jugadores
-    spinRotation?: number;
+interface LobbyState {
+    lobbyId: string;
+    code: string;
+    hostId: string;
+    status: LobbyStatus;
+    config: LobbyConfig | null;
 }
 
 interface LobbyContextType {
     lobbyId: string | null;
+    lobbyCode: string | null;
     isHost: boolean;
     players: Player[];
     config: LobbyConfig | null;
-    status: 'waiting' | 'swiping' | 'spinning' | 'finished' | null;
-    createLobby: (config: LobbyConfig) => Promise<void>;
-    joinLobby: (lobbyCode: string) => Promise<void>;
+    status: LobbyStatus | null;
+    createLobby: (rouletteConfig: RouletteConfig) => Promise<boolean>;
+    /** Entrar por invitación (id de sala) */
+    joinLobbyById: (lobbyId: string) => Promise<boolean>;
+    /** Entrar con el código corto que comparte el anfitrión */
+    joinLobbyByCode: (code: string) => Promise<boolean>;
     leaveLobby: () => Promise<void>;
-    startGame: () => void;
+    /** Solo anfitrión: cambia el estado y/o mezcla cambios en la configuración compartida */
+    updateLobby: (patch: { status?: LobbyStatus; config?: Partial<LobbyConfig> }) => Promise<void>;
+    castVote: (movieId: string, vote: 'like' | 'skip') => Promise<void>;
+    fetchLikes: () => Promise<VoteRow[]>;
+    countVotes: () => Promise<number>;
+    /** Solo anfitrión: borra los votos al empezar una ronda nueva */
+    clearVotes: () => Promise<void>;
 }
 
 const LobbyContext = createContext<LobbyContextType | undefined>(undefined);
 
+const LOBBY_COLUMNS = 'id, code, host_id, config, status';
+const UNIQUE_VIOLATION = '23505';
+const lastLobbyKey = (userId: string) => `cinematch_lobby_${userId}`;
+
+function toPlayers(rows: LobbyMemberRow[]): Player[] {
+    return rows.map(m => ({
+        id: m.user_id,
+        name: m.profiles?.username ?? '',
+        avatar: m.profiles?.avatar_url ?? '',
+        isHost: m.role === 'host',
+    }));
+}
+
 export function LobbyProvider({ children }: { children: ReactNode }) {
-    const { user, profile } = useAuth();
-    const [lobbyId, setLobbyId] = useState<string | null>(null);
-    const [lobbyCode, setLobbyCode] = useState<string | null>(null);
+    const { user } = useAuth();
+    const { t } = useLanguage();
+    const { showToast } = useToast();
+    const userId = user?.id ?? null;
+
+    const [lobby, setLobby] = useState<LobbyState | null>(null);
     const [players, setPlayers] = useState<Player[]>([]);
-    const [config, setConfig] = useState<LobbyConfig | null>(null);
-    const [isHost, setIsHost] = useState(false);
-    const [status, setStatus] = useState<'waiting' | 'swiping' | 'spinning' | 'finished' | null>(null);
-    const router = useRouter();
+    const channelRef = useRef<RealtimeChannel | null>(null);
+    /** Copia síncrona de la sala: updateLobby mezcla siempre sobre la config más reciente */
+    const lobbyRef = useRef<LobbyState | null>(null);
 
-    // Canal Realtime para este lobby
-    const [channel, setChannel] = useState<ReturnType<typeof supabase.channel> | null>(null);
+    const applyLobby = useCallback((next: LobbyState | null) => {
+        lobbyRef.current = next;
+        setLobby(next);
+    }, []);
 
-    const currentUserId = user?.id || null;
+    const disposeChannel = useCallback(() => {
+        const channel = channelRef.current;
+        channelRef.current = null;
+        if (channel) void supabase.removeChannel(channel);
+    }, []);
 
-    const disposeChannel = async () => {
-        if (!channel) return;
-        try {
-            await supabase.removeChannel(channel);
-        } catch {
-            // noop
-        }
-        setChannel(null);
-    };
+    const resetLocal = useCallback(() => {
+        disposeChannel();
+        applyLobby(null);
+        setPlayers([]);
+        if (userId) removeKey(lastLobbyKey(userId));
+    }, [disposeChannel, applyLobby, userId]);
 
-    const hydrateLobbyFromDb = async (id: string) => {
-        if (!currentUserId) return;
-
-        const { data: lobby, error } = await supabase
-            .from('roulette_lobbies')
-            .select('id, code, host_id, config, status')
-            .eq('id', id)
-            .single();
-
-        if (error || !lobby) return;
-
-        setLobbyId(lobby.id);
-        setLobbyCode(lobby.code);
-        setIsHost(lobby.host_id === currentUserId);
-        setStatus((lobby.status as any) ?? 'waiting');
-        setConfig({
-            ...(lobby.config?.lobbyConfig ?? {}),
-            platforms: lobby.config?.platforms ?? [],
-            contentTypes: lobby.config?.contentTypes ?? [],
-            mode: lobby.config?.mode ?? 'roulette',
-            rouletteConfig: lobby.config?.rouletteConfig ?? null,
-            roundMovies: lobby.config?.roundMovies ?? null,
-            winningMatches: lobby.config?.winningMatches ?? null,
-            spinRotation: lobby.config?.spinRotation ?? null
-        });
-
-        // Cargar miembros iniciales
-        const { data: members } = await supabase
+    const loadMembers = useCallback(async (lobbyId: string) => {
+        const { data, error } = await supabase
             .from('roulette_lobby_members')
             .select('user_id, role, profiles:profiles!user_id(id, username, avatar_url)')
-            .eq('lobby_id', lobby.id);
-
-        if (members) {
-            const mapped: Player[] = members.map((m: any) => ({
-                id: m.user_id,
-                name: m.profiles?.username || 'Jugador',
-                avatar: m.profiles?.avatar_url || '',
-                isHost: m.role === 'host',
-                status: 'accepted'
-            }));
-            setPlayers(mapped);
-        }
-    };
-
-    const subscribeLobby = async (id: string) => {
-        if (!currentUserId) return;
-        const name = `roulette-lobby-${id}`;
-        const ch = supabase.channel(name);
-
-        ch
-            .on(
-                'postgres_changes',
-                {
-                    event: '*',
-                    schema: 'public',
-                    table: 'roulette_lobby_members',
-                    filter: `lobby_id=eq.${id}`
-                },
-                async () => {
-                    // Rehidratar miembros cuando haya cambios
-                    const { data: members } = await supabase
-                        .from('roulette_lobby_members')
-                        .select('user_id, role, profiles:profiles!user_id(id, username, avatar_url)')
-                        .eq('lobby_id', id);
-
-                    if (members) {
-                        const mapped: Player[] = members.map((m: any) => ({
-                            id: m.user_id,
-                            name: m.profiles?.username || 'Jugador',
-                            avatar: m.profiles?.avatar_url || '',
-                            isHost: m.role === 'host',
-                            status: 'accepted'
-                        }));
-                        setPlayers(mapped);
-                    }
-                }
-            )
-            .on(
-                'postgres_changes',
-                {
-                    event: '*',
-                    schema: 'public',
-                    table: 'roulette_lobbies',
-                    filter: `id=eq.${id}`
-                },
-                (payload) => {
-                    if (payload.eventType === 'DELETE') {
-                        // El lobby ha sido destruido (por ejemplo, porque el host salió)
-                        setLobbyId(null);
-                        setLobbyCode(null);
-                        setConfig(null);
-                        setPlayers([]);
-                        setIsHost(false);
-                        setStatus(null);
-                        return;
-                    }
-
-                    const row: any = payload.new;
-                    if (row?.status) {
-                        setStatus(row.status as any);
-                    }
-                    if (row?.config) {
-                        setConfig({
-                            ...(row.config.lobbyConfig ?? {}),
-                            platforms: row.config.platforms ?? [],
-                            contentTypes: row.config.contentTypes ?? [],
-                            mode: row.config.mode ?? 'roulette',
-                            rouletteConfig: row.config.rouletteConfig ?? null,
-                            roundMovies: row.config.roundMovies ?? null,
-                            winningMatches: row.config.winningMatches ?? null,
-                            spinRotation: row.config.spinRotation ?? null
-                        });
-                    }
-                }
-            )
-            .on(
-                'postgres_changes',
-                {
-                    event: 'UPDATE',
-                    schema: 'public',
-                    table: 'roulette_invitations',
-                    filter: `lobby_id=eq.${id}`
-                },
-                (payload) => {
-                    // En el futuro se podrían mapear estados de invitación a la UI.
-                }
-            )
-            .subscribe(async (status) => {
-                if (status === 'SUBSCRIBED') {
-                    await hydrateLobbyFromDb(id);
-                }
-            });
-
-        setChannel(ch);
-    };
-
-    const createLobby = async (newConfig: LobbyConfig) => {
-        if (!currentUserId) return;
-
-        // Generar código corto de sala (4 caracteres)
-        const code = Math.random().toString(36).substring(2, 6).toUpperCase();
-
-        const payloadConfig = {
-            mode: newConfig.mode ?? 'roulette',
-            platforms: newConfig.platforms,
-            contentTypes: newConfig.contentTypes,
-            rouletteConfig: newConfig.rouletteConfig ?? null,
-            lobbyConfig: newConfig
-        };
-
-        const { data, error } = await supabase
-            .from('roulette_lobbies')
-            .insert({
-                code,
-                host_id: currentUserId,
-                config: payloadConfig
-            })
-            .select('id, code')
-            .single();
-
-        if (error || !data) {
-            console.error('Error creating roulette lobby', error);
+            .eq('lobby_id', lobbyId);
+        if (error) {
+            console.error('Error loading lobby members:', error.message);
             return;
         }
+        if (lobbyRef.current?.lobbyId === lobbyId) setPlayers(toPlayers((data ?? []) as unknown as LobbyMemberRow[]));
+    }, []);
 
-        const lobbyDbId = data.id as string;
+    /** Lee la sala; devuelve false si ya no existe o no es accesible */
+    const hydrate = useCallback(async (lobbyId: string) => {
+        const { data, error } = await supabase.from('roulette_lobbies').select(LOBBY_COLUMNS).eq('id', lobbyId).maybeSingle();
+        const row = data as RouletteLobbyRow | null;
+        if (error || !row || (row.status === 'finished' && !row.config?.winnerId)) return false;
+        applyLobby({ lobbyId: row.id, code: row.code, hostId: row.host_id, status: row.status, config: row.config });
+        await loadMembers(row.id);
+        return true;
+    }, [applyLobby, loadMembers]);
 
-        // Registrar al host como miembro
-        const { error: memberError } = await supabase
-            .from('roulette_lobby_members')
-            .insert({
-                lobby_id: lobbyDbId,
-                user_id: currentUserId,
-                role: 'host'
+    const subscribe = useCallback((lobbyId: string) => {
+        disposeChannel();
+        const channel = supabase
+            .channel(`roulette-lobby-${lobbyId}`)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'roulette_lobby_members', filter: `lobby_id=eq.${lobbyId}` },
+                () => void loadMembers(lobbyId))
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'roulette_lobbies', filter: `id=eq.${lobbyId}` },
+                payload => {
+                    if (payload.eventType === 'DELETE') {
+                        if (lobbyRef.current && lobbyRef.current.hostId !== userId) showToast(t.lobbyClosedByHost, 'info');
+                        resetLocal();
+                        return;
+                    }
+                    const row = payload.new as RouletteLobbyRow;
+                    const current = lobbyRef.current;
+                    if (current?.lobbyId === lobbyId) applyLobby({ ...current, status: row.status, config: row.config });
+                })
+            .subscribe(state => {
+                // Al (re)conectar se relee todo por si se perdió algún evento
+                if (state === 'SUBSCRIBED') void hydrate(lobbyId);
             });
+        channelRef.current = channel;
+    }, [disposeChannel, loadMembers, hydrate, applyLobby, resetLocal, showToast, t.lobbyClosedByHost, userId]);
 
-        if (memberError) {
-            console.error('Error adding host to roulette_lobby_members', memberError);
+    const enterLobby = useCallback(async (lobbyId: string) => {
+        if (!userId) return false;
+        const ok = await hydrate(lobbyId);
+        if (!ok) return false;
+        writeString(lastLobbyKey(userId), lobbyId);
+        subscribe(lobbyId);
+        return true;
+    }, [userId, hydrate, subscribe]);
+
+    // Última versión de enterLobby para el efecto de abajo, que solo debe depender del usuario
+    const enterLobbyRef = useRef(enterLobby);
+    useEffect(() => {
+        enterLobbyRef.current = enterLobby;
+    }, [enterLobby]);
+
+    // Al recargar se recupera la última sala; al cambiar de usuario se abandona la local
+    useEffect(() => {
+        if (!userId) return;
+        const stored = readString(lastLobbyKey(userId));
+        if (stored) {
+            void enterLobbyRef.current(stored).then(ok => {
+                if (!ok) removeKey(lastLobbyKey(userId));
+            });
         }
+        return () => {
+            const channel = channelRef.current;
+            channelRef.current = null;
+            if (channel) void supabase.removeChannel(channel);
+            lobbyRef.current = null;
+            setLobby(null);
+            setPlayers([]);
+        };
+    }, [userId]);
 
-        setLobbyId(lobbyDbId);
-        setLobbyCode(data.code);
-        setConfig(newConfig);
-        setIsHost(true);
-        setStatus('waiting');
-        setPlayers([{
-            id: currentUserId,
-            name: profile?.username || 'Tú',
-            avatar: '',
-            isHost: true,
-            status: 'accepted'
-        }]);
-
-        await subscribeLobby(lobbyDbId);
-    };
-
-    const joinLobby = async (codeOrId: string) => {
-        if (!currentUserId) return;
-
-        // Caso 1: viene de una invitación y ya es un UUID de lobby válido.
-        const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(codeOrId);
-
-        let lobbyDbId = codeOrId;
-        let lobbyCodeLocal: string | null = null;
-
-        // Caso 2: el usuario introduce o navega por código de sala (no UUID)
-        if (!looksLikeUuid) {
-            const { data: lobby, error } = await supabase
+    const createLobby = useCallback(async (rouletteConfig: RouletteConfig) => {
+        if (!userId) return false;
+        const config: LobbyConfig = { rouletteConfig };
+        // El código es único en BD: si coincide con otro se genera uno nuevo
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const { data, error } = await supabase
                 .from('roulette_lobbies')
-                .select('id, code')
-                .or(`id.eq.${codeOrId},code.eq.${codeOrId}`)
-                .maybeSingle();
+                .insert({ code: randomCode(6), host_id: userId, config, status: 'waiting' })
+                .select('id')
+                .single();
+            if (error?.code === UNIQUE_VIOLATION) continue;
+            if (error || !data) break;
 
-            if (error || !lobby) {
-                console.error('Lobby not found', error);
-                return;
+            const lobbyId = (data as { id: string }).id;
+            const { error: memberError } = await supabase
+                .from('roulette_lobby_members')
+                .insert({ lobby_id: lobbyId, user_id: userId, role: 'host' });
+            if (memberError) {
+                await supabase.from('roulette_lobbies').delete().eq('id', lobbyId);
+                break;
             }
-
-            lobbyDbId = lobby.id as string;
-            lobbyCodeLocal = lobby.code as string;
+            return enterLobby(lobbyId);
         }
+        showToast(t.genericError, 'error');
+        return false;
+    }, [userId, enterLobby, showToast, t.genericError]);
 
-        // Insertar miembro si no existe
-        const { error: memberError } = await supabase
+    const joinLobbyById = useCallback(async (lobbyId: string) => {
+        if (!userId) return false;
+        if (lobbyRef.current?.lobbyId === lobbyId) return true;
+        // Si ya era miembro (o anfitrión) no se toca su rol
+        const { error } = await supabase
             .from('roulette_lobby_members')
-            .upsert({
-                lobby_id: lobbyDbId,
-                user_id: currentUserId,
-                role: 'guest'
-            }, {
-                onConflict: 'lobby_id,user_id'
-            });
-
-        if (memberError) {
-            console.error('Error joining roulette lobby', memberError);
+            .upsert({ lobby_id: lobbyId, user_id: userId, role: 'guest' }, { onConflict: 'lobby_id,user_id', ignoreDuplicates: true });
+        if (error) {
+            showToast(t.lobbyNotFound, 'error');
+            return false;
         }
+        const ok = await enterLobby(lobbyId);
+        if (!ok) showToast(t.lobbyNotFound, 'error');
+        return ok;
+    }, [userId, enterLobby, showToast, t.lobbyNotFound]);
 
-        setLobbyId(lobbyDbId);
-        setLobbyCode(lobbyCodeLocal);
-        setIsHost(false);
+    const joinLobbyByCode = useCallback(async (code: string) => {
+        if (!userId) return false;
+        const { data, error } = await supabase.rpc('join_lobby_by_code', { p_code: code.trim().toUpperCase() });
+        const lobbyId = data as string | null;
+        if (error || !lobbyId) {
+            showToast(t.lobbyNotFound, 'error');
+            return false;
+        }
+        return enterLobby(lobbyId);
+    }, [userId, enterLobby, showToast, t.lobbyNotFound]);
 
-        await subscribeLobby(lobbyDbId);
-    };
-
-    const leaveLobby = async () => {
-        if (lobbyId && currentUserId) {
-            try {
-                if (isHost) {
-                    // Si el usuario es el host, eliminar completamente el lobby.
-                    // Antes marcamos el lobby como "finished" para que los invitados puedan reaccionar.
-                    const { error: statusError } = await supabase
-                        .from('roulette_lobbies')
-                        .update({ status: 'finished' })
-                        .eq('id', lobbyId);
-
-                    if (statusError) {
-                        console.error('Error updating lobby status to finished', statusError);
-                    }
-
-                    // Esto también debería eliminar por cascada a los miembros y votos asociados.
-                    const { error: deleteLobbyError } = await supabase
-                        .from('roulette_lobbies')
-                        .delete()
-                        .eq('id', lobbyId);
-
-                    if (deleteLobbyError) {
-                        console.error('Error deleting lobby as host', deleteLobbyError);
-                    }
-
-                    // Además, por seguridad, intentamos limpiar manualmente los miembros.
-                    const { error: deleteMembersError } = await supabase
-                        .from('roulette_lobby_members')
-                        .delete()
-                        .eq('lobby_id', lobbyId);
-
-                    if (deleteMembersError) {
-                        console.error('Error deleting lobby members as host', deleteMembersError);
-                    }
-                } else {
-                    // Invitado: solo se elimina a sí mismo del lobby.
-                    const { error: leaveError } = await supabase
-                        .from('roulette_lobby_members')
-                        .delete()
-                        .eq('lobby_id', lobbyId)
-                        .eq('user_id', currentUserId);
-
-                    if (leaveError) {
-                        console.error('Error leaving lobby as guest', leaveError);
-                    }
-                }
-            } catch (error) {
-                console.error('Error leaving lobby', error);
+    const leaveLobby = useCallback(async () => {
+        const current = lobbyRef.current;
+        if (current && userId) {
+            if (current.hostId === userId) {
+                // Borrar la sala avisa a los invitados (evento DELETE) y elimina miembros y votos en cascada
+                const { error } = await supabase.from('roulette_lobbies').delete().eq('id', current.lobbyId);
+                if (error) console.error('Error closing lobby:', error.message);
+            } else {
+                await supabase.from('roulette_lobby_members').delete().eq('lobby_id', current.lobbyId).eq('user_id', userId);
             }
         }
+        resetLocal();
+    }, [userId, resetLocal]);
 
-        await disposeChannel();
-
-        setLobbyId(null);
-        setLobbyCode(null);
-        setConfig(null);
-        setPlayers([]);
-        setIsHost(false);
-
-        // Limpiar lobby recordado de invitaciones previas
-        if (typeof window !== 'undefined') {
-            window.localStorage.removeItem('lastRouletteLobbyId');
+    const updateLobby = useCallback(async (patch: { status?: LobbyStatus; config?: Partial<LobbyConfig> }) => {
+        const current = lobbyRef.current;
+        if (!current || current.hostId !== userId) return;
+        const config = patch.config && current.config ? { ...current.config, ...patch.config } : current.config;
+        const status = patch.status ?? current.status;
+        applyLobby({ ...current, status, config }); // optimista: el anfitrión ve el cambio al instante
+        const { error } = await supabase.from('roulette_lobbies').update({ status, config }).eq('id', current.lobbyId);
+        if (error) {
+            console.error('Error updating lobby:', error.message);
+            showToast(t.genericError, 'error');
         }
-    };
+    }, [userId, applyLobby, showToast, t.genericError]);
 
-    const startGame = () => {
-        // En el futuro se puede emitir un evento Realtime para sincronizar el inicio de partida.
-    };
+    const castVote = useCallback(async (movieId: string, vote: 'like' | 'skip') => {
+        const current = lobbyRef.current;
+        if (!current || !userId) return;
+        const { error } = await supabase
+            .from('roulette_votes')
+            .upsert({ lobby_id: current.lobbyId, user_id: userId, movie_id: movieId, vote }, { onConflict: 'lobby_id,user_id,movie_id' });
+        if (error) console.error('Error saving vote:', error.message);
+    }, [userId]);
 
-    return (
-        <LobbyContext.Provider value={{
-            lobbyId,
-            isHost,
-            players,
-            config,
-            status,
-            createLobby,
-            joinLobby,
-            leaveLobby,
-            startGame
-        }}>
-            {children}
-        </LobbyContext.Provider>
-    );
+    const fetchLikes = useCallback(async (): Promise<VoteRow[]> => {
+        const current = lobbyRef.current;
+        if (!current) return [];
+        const { data, error } = await supabase
+            .from('roulette_votes')
+            .select('movie_id, user_id')
+            .eq('lobby_id', current.lobbyId)
+            .eq('vote', 'like');
+        if (error) throw error;
+        return (data ?? []) as VoteRow[];
+    }, []);
+
+    const countVotes = useCallback(async () => {
+        const current = lobbyRef.current;
+        if (!current) return 0;
+        const { count } = await supabase
+            .from('roulette_votes')
+            .select('id', { count: 'exact', head: true })
+            .eq('lobby_id', current.lobbyId);
+        return count ?? 0;
+    }, []);
+
+    const clearVotes = useCallback(async () => {
+        const current = lobbyRef.current;
+        if (!current || current.hostId !== userId) return;
+        const { error } = await supabase.from('roulette_votes').delete().eq('lobby_id', current.lobbyId);
+        if (error) console.error('Error clearing votes:', error.message);
+    }, [userId]);
+
+    const value = useMemo<LobbyContextType>(() => ({
+        lobbyId: lobby?.lobbyId ?? null,
+        lobbyCode: lobby?.code ?? null,
+        isHost: !!lobby && lobby.hostId === userId,
+        players,
+        config: lobby?.config ?? null,
+        status: lobby?.status ?? null,
+        createLobby, joinLobbyById, joinLobbyByCode, leaveLobby,
+        updateLobby, castVote, fetchLikes, countVotes, clearVotes,
+    }), [lobby, userId, players, createLobby, joinLobbyById, joinLobbyByCode, leaveLobby, updateLobby, castVote, fetchLikes, countVotes, clearVotes]);
+
+    return <LobbyContext.Provider value={value}>{children}</LobbyContext.Provider>;
 }
 
 export function useLobby() {

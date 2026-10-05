@@ -1,283 +1,173 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { Movie } from '@/lib/data';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthProvider';
-
-export type ChallengeStatus = 'pending' | 'accepted' | 'declined' | 'expired';
+import { fetchProfilesMap } from '@/lib/friends';
+import type { ChallengeRow, ChallengeStatus, Movie, ProfileSummary } from '@/types';
 
 export interface Challenge {
     id: string;
     movie: Movie;
-    sender: string;
-    senderId?: string;
-    receiverId?: string;
-    receiverName?: string;
-    timestamp: number;
+    /** El otro usuario: quien lo envió (recibidos) o a quien se envió (enviados) */
+    counterpartId: string;
+    counterpartName: string;
+    createdAt: number;
     status: ChallengeStatus;
 }
 
 interface ChallengeContextType {
-    // Retos recibidos pendientes (usados por SwipeDeck overlay)
+    /** Recibidos pendientes, el más reciente primero (se muestran sobre el feed) */
     pendingChallenges: Challenge[];
-    // Historial completo de retos recibidos (pending + resueltos)
+    /** Historial de recibidos */
     receivedChallenges: Challenge[];
-    // Retos enviados por el usuario
     sentChallenges: Challenge[];
-    // El primer reto pendiente activo (convenencia para SwipeDeck)
-    activeChallenge: Challenge | null;
-    sendChallenge: (movie: Movie, friendId: string) => Promise<void>;
-    // Resuelve el activeChallenge actual
-    resolveChallenge: (accepted: boolean) => Promise<void>;
-    loading: boolean;
+    sendChallenge: (movie: Movie, friendId: string, friendName?: string) => Promise<void>;
+    resolveChallenge: (challengeId: string, accepted: boolean) => Promise<boolean>;
 }
 
 const ChallengeContext = createContext<ChallengeContextType | undefined>(undefined);
 
+const CHALLENGE_COLUMNS = 'id, sender_id, receiver_id, movie_id, movie_title, movie_image, movie_year, movie_rating, movie_type, status, created_at';
+
+function toChallenge(row: ChallengeRow, counterpartId: string, profiles: Map<string, ProfileSummary>): Challenge {
+    return {
+        id: row.id,
+        movie: {
+            id: String(row.movie_id),
+            type: row.movie_type ?? 'movie',
+            title: row.movie_title,
+            image: row.movie_image ?? '',
+            year: row.movie_year ?? 0,
+            rating: Number(row.movie_rating ?? 0),
+            synopsis: '',
+            genres: [],
+        },
+        counterpartId,
+        counterpartName: profiles.get(counterpartId)?.username ?? '',
+        createdAt: new Date(row.created_at).getTime(),
+        status: row.status,
+    };
+}
+
+/** Retos recibidos y enviados del usuario (null si falla la consulta) */
+async function loadChallenges(userId: string): Promise<{ received: Challenge[]; sent: Challenge[] } | null> {
+    const [receivedRes, sentRes] = await Promise.all([
+        supabase.from('challenges').select(CHALLENGE_COLUMNS).eq('receiver_id', userId).order('created_at', { ascending: false }),
+        supabase.from('challenges').select(CHALLENGE_COLUMNS).eq('sender_id', userId).order('created_at', { ascending: false }),
+    ]);
+    if (receivedRes.error || sentRes.error) {
+        console.error('Error loading challenges:', (receivedRes.error ?? sentRes.error)?.message);
+        return null;
+    }
+    const received = (receivedRes.data ?? []) as ChallengeRow[];
+    const sent = (sentRes.data ?? []) as ChallengeRow[];
+    const profiles = await fetchProfilesMap([...received.map(c => c.sender_id), ...sent.map(c => c.receiver_id)]);
+    return {
+        received: received.map(c => toChallenge(c, c.sender_id, profiles)),
+        sent: sent.map(c => toChallenge(c, c.receiver_id, profiles)),
+    };
+}
+
 export function ChallengeProvider({ children }: { children: React.ReactNode }) {
     const { user } = useAuth();
-    const [pendingChallenges, setPendingChallenges] = useState<Challenge[]>([]);
-    const [receivedChallenges, setReceivedChallenges] = useState<Challenge[]>([]);
-    const [sentChallenges, setSentChallenges] = useState<Challenge[]>([]);
-    const [loading, setLoading] = useState(false);
-
-    // El reto activo es siempre el primero pendiente
-    const activeChallenge = pendingChallenges[0] ?? null;
-
-    // ---------------------------------------------------------------------------
-    // Helper: mapear row de DB a Challenge
-    // ---------------------------------------------------------------------------
-    const mapRow = (c: any, senderName: string): Challenge => ({
-        id: c.id,
-        movie: {
-            id: c.movie_id?.toString() ?? '',
-            title: c.movie_title ?? '',
-            image: c.movie_image ?? '',
-            year: c.movie_year ?? 0,
-            type: (c.movie_type ?? 'movie') as 'movie' | 'tv',
-            rating: c.movie_rating ? parseFloat(c.movie_rating) : 0,
-            synopsis: '',
-            synopsis_es: '',
-            genres: []
-        },
-        sender: senderName,
-        senderId: c.sender_id,
-        receiverId: c.receiver_id,
-        timestamp: new Date(c.created_at).getTime(),
-        status: c.status as ChallengeStatus
+    const userId = user?.id ?? null;
+    const [lists, setLists] = useState<{ owner: string | null; received: Challenge[]; sent: Challenge[] }>({
+        owner: null, received: [], sent: [],
     });
 
-    // ---------------------------------------------------------------------------
-    // Fetch desde Supabase
-    // ---------------------------------------------------------------------------
-    const fetchChallenges = useCallback(async () => {
-        if (!user) return;
-        setLoading(true);
-        try {
-            // Recibidos (todos los estados para el historial)
-            const { data: received, error: receivedError } = await supabase
-                .from('challenges')
-                .select('id, sender_id, receiver_id, movie_id, movie_title, movie_image, movie_year, movie_rating, movie_type, status, created_at')
-                .eq('receiver_id', user.id)
-                .order('created_at', { ascending: false });
-
-            if (receivedError) throw receivedError;
-
-            // Enviados
-            const { data: sent, error: sentError } = await supabase
-                .from('challenges')
-                .select('id, sender_id, receiver_id, movie_id, movie_title, movie_image, movie_year, movie_rating, movie_type, status, created_at')
-                .eq('sender_id', user.id)
-                .order('created_at', { ascending: false });
-
-            if (sentError) throw sentError;
-
-            if (received && received.length > 0) {
-                // Obtener perfiles de remitentes
-                const senderIds = [...new Set(received.map((c: any) => c.sender_id).filter(Boolean))];
-                const { data: profiles } = await supabase
-                    .from('profiles')
-                    .select('id, username')
-                    .in('id', senderIds);
-                const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p.username]));
-
-                const mapped: Challenge[] = received.map((c: any) =>
-                    mapRow(c, profileMap.get(c.sender_id) || 'Usuario')
-                );
-                setReceivedChallenges(mapped);
-                setPendingChallenges(mapped.filter(c => c.status === 'pending'));
-            } else {
-                setReceivedChallenges([]);
-                setPendingChallenges([]);
-            }
-
-            if (sent && sent.length > 0) {
-                // Obtener perfiles de receptores
-                const receiverIds = [...new Set(sent.map((c: any) => c.receiver_id).filter(Boolean))];
-                const { data: profiles } = await supabase
-                    .from('profiles')
-                    .select('id, username')
-                    .in('id', receiverIds);
-                const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p.username]));
-
-                const mapped: Challenge[] = sent.map((c: any) => ({
-                    ...mapRow(c, profileMap.get(c.receiver_id) || 'Amigo'),
-                    receiverName: profileMap.get(c.receiver_id) || 'Amigo'
-                }));
-                setSentChallenges(mapped);
-            } else {
-                setSentChallenges([]);
-            }
-        } catch (error) {
-            console.error('Error fetching challenges:', error);
-            // Fallback localStorage
-            try {
-                const stored = localStorage.getItem(`cinematch_challenges_${user.id}`);
-                if (stored) {
-                    const parsed: Challenge[] = JSON.parse(stored);
-                    setReceivedChallenges(parsed);
-                    setPendingChallenges(parsed.filter(c => c.status === 'pending'));
-                }
-                const storedSent = localStorage.getItem(`cinematch_sent_challenges_${user.id}`);
-                if (storedSent) setSentChallenges(JSON.parse(storedSent));
-            } catch (e) {
-                console.error('localStorage fallback failed', e);
-            }
-        } finally {
-            setLoading(false);
-        }
-    }, [user]);
-
-    // ---------------------------------------------------------------------------
-    // Carga inicial + Supabase Realtime (sustituye al setInterval)
-    // ---------------------------------------------------------------------------
+    // Carga inicial + Realtime (retos que llegan, que se responden y que envío desde otro dispositivo)
     useEffect(() => {
-        if (!user) {
-            setPendingChallenges([]);
-            setReceivedChallenges([]);
-            setSentChallenges([]);
-            return;
-        }
-
-        fetchChallenges();
-
-        const channel = supabase
-            .channel(`challenges-${user.id}`)
-            .on('postgres_changes', {
-                event: 'INSERT',
-                schema: 'public',
-                table: 'challenges',
-                filter: `receiver_id=eq.${user.id}`
-            }, () => fetchChallenges())
-            .on('postgres_changes', {
-                event: 'UPDATE',
-                schema: 'public',
-                table: 'challenges',
-                filter: `receiver_id=eq.${user.id}`
-            }, () => fetchChallenges())
-            .on('postgres_changes', {
-                event: 'UPDATE',
-                schema: 'public',
-                table: 'challenges',
-                filter: `sender_id=eq.${user.id}`
-            }, () => fetchChallenges())
-            .subscribe();
-
-        return () => {
-            supabase.removeChannel(channel);
+        if (!userId) return;
+        let cancelled = false;
+        let latest = 0;
+        const refresh = () => {
+            const requestId = ++latest;
+            void loadChallenges(userId).then(result => {
+                if (!cancelled && result && requestId === latest) setLists({ owner: userId, ...result });
+            });
         };
-    }, [user, fetchChallenges]);
+        refresh();
+        const channel = supabase
+            .channel(`challenges-${userId}`)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'challenges', filter: `receiver_id=eq.${userId}` }, refresh)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'challenges', filter: `sender_id=eq.${userId}` }, refresh)
+            .subscribe();
+        return () => {
+            cancelled = true;
+            void supabase.removeChannel(channel);
+        };
+    }, [userId]);
 
-    // ---------------------------------------------------------------------------
-    // Enviar reto
-    // ---------------------------------------------------------------------------
-    const sendChallenge = async (movie: Movie, friendId: string) => {
-        if (!user) throw new Error('Usuario no autenticado');
-        if (!movie?.id || !movie?.title) throw new Error('Película inválida');
-        if (friendId === user.id) throw new Error('No puedes enviarte un reto a ti mismo');
+    const current = lists.owner === userId ? lists : { received: [], sent: [] };
+    const receivedChallenges = current.received;
+    const sentChallenges = current.sent;
+    const pendingChallenges = useMemo(
+        () => receivedChallenges.filter(c => c.status === 'pending'),
+        [receivedChallenges],
+    );
 
-        const movieId = parseInt(movie.id);
-        if (isNaN(movieId)) throw new Error('ID de película inválido');
+    const sendChallenge = useCallback(async (movie: Movie, friendId: string, friendName = '') => {
+        if (!userId) throw new Error('Not authenticated');
+        if (friendId === userId) throw new Error('Cannot challenge yourself');
+        const movieId = Number(movie.id);
+        if (!Number.isInteger(movieId) || !movie.title) throw new Error('Invalid movie');
 
-        const { data: friendProfile } = await supabase
-            .from('profiles')
-            .select('username')
-            .eq('id', friendId)
-            .single();
-
-        const friendName = friendProfile?.username ?? 'Amigo';
-
-        const { data: challengeData, error } = await supabase
+        const { data, error } = await supabase
             .from('challenges')
             .insert({
-                sender_id: user.id,
+                sender_id: userId,
                 receiver_id: friendId,
                 movie_id: movieId,
                 movie_title: movie.title,
-                movie_image: movie.image ?? '',
-                movie_year: movie.year ?? null,
+                movie_image: movie.image || null,
+                movie_year: movie.year || null,
                 movie_rating: movie.rating ?? null,
-                movie_type: movie.type ?? 'movie',
-                status: 'pending'
+                movie_type: movie.type,
+                status: 'pending',
             })
-            .select()
+            .select('id')
             .single();
+        if (error) throw error;
 
-        if (error) throw new Error(error.message);
-
-        // Actualización optimista
-        const newChallenge: Challenge = {
-            id: challengeData.id,
+        const created: Challenge = {
+            id: (data as { id: string }).id,
             movie,
-            sender: friendName,
-            receiverName: friendName,
-            senderId: user.id,
-            receiverId: friendId,
-            timestamp: Date.now(),
-            status: 'pending'
+            counterpartId: friendId,
+            counterpartName: friendName,
+            createdAt: Date.now(),
+            status: 'pending',
         };
-        setSentChallenges(prev => [newChallenge, ...prev]);
-    };
+        setLists(prev => ({ ...prev, sent: [created, ...prev.sent] }));
+    }, [userId]);
 
-    // ---------------------------------------------------------------------------
-    // Resolver el reto activo
-    // ---------------------------------------------------------------------------
-    const resolveChallenge = async (accepted: boolean) => {
-        if (!activeChallenge || !user) return;
+    const resolveChallenge = useCallback(async (challengeId: string, accepted: boolean) => {
+        if (!userId) return false;
+        const status: ChallengeStatus = accepted ? 'accepted' : 'declined';
+        const setStatus = (next: ChallengeStatus) => setLists(prev => ({
+            ...prev,
+            received: prev.received.map(c => (c.id === challengeId ? { ...c, status: next } : c)),
+        }));
 
-        const newStatus: ChallengeStatus = accepted ? 'accepted' : 'declined';
-
-        try {
-            await supabase
-                .from('challenges')
-                .update({ status: newStatus })
-                .eq('id', activeChallenge.id)
-                .eq('receiver_id', user.id);
-        } catch (error) {
-            console.error('Error resolving challenge:', error);
+        setStatus(status); // optimista
+        const { error } = await supabase
+            .from('challenges')
+            .update({ status })
+            .eq('id', challengeId)
+            .eq('receiver_id', userId);
+        if (error) {
+            console.error('Error resolving challenge:', error.message);
+            setStatus('pending');
+            return false;
         }
+        return true;
+    }, [userId]);
 
-        // Actualización optimista local
-        setPendingChallenges(prev => prev.filter(c => c.id !== activeChallenge.id));
-        setReceivedChallenges(prev =>
-            prev.map(c => c.id === activeChallenge.id ? { ...c, status: newStatus } : c)
-        );
-    };
+    const value = useMemo<ChallengeContextType>(() => ({
+        pendingChallenges, receivedChallenges, sentChallenges, sendChallenge, resolveChallenge,
+    }), [pendingChallenges, receivedChallenges, sentChallenges, sendChallenge, resolveChallenge]);
 
-    return (
-        <ChallengeContext.Provider value={{
-            pendingChallenges,
-            receivedChallenges,
-            sentChallenges,
-            activeChallenge,
-            sendChallenge,
-            resolveChallenge,
-            loading
-        }}>
-            {children}
-        </ChallengeContext.Provider>
-    );
+    return <ChallengeContext.Provider value={value}>{children}</ChallengeContext.Provider>;
 }
 
 export function useChallenge() {

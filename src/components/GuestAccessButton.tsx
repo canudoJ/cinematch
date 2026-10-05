@@ -6,6 +6,7 @@ import { Sparkles } from 'lucide-react';
 import { useAuth } from '@/context/AuthProvider';
 import { useToast } from '@/components/ui/Toast';
 import { Button, type ButtonProps } from '@/components/ui/Button';
+import { useLanguage } from '@/context/LanguageContext';
 
 interface GuestAccessButtonProps {
     /** Ruta a la que ir tras entrar como invitado */
@@ -19,8 +20,9 @@ interface GuestAccessButtonProps {
  * sin pedir email ni contraseña.
  */
 export function GuestAccessButton({ redirectTo = '/', variant = 'outline', className }: GuestAccessButtonProps) {
-    const { signInAsGuest } = useAuth();
+    const { signInAsGuest, isGuest } = useAuth();
     const { showToast } = useToast();
+    const { t } = useLanguage();
     const router = useRouter();
     const [loading, setLoading] = useState(false);
 
@@ -28,11 +30,11 @@ export function GuestAccessButton({ redirectTo = '/', variant = 'outline', class
         setLoading(true);
         try {
             await signInAsGuest();
-            showToast('Estás usando CineMatch como invitado', 'success');
+            if (!isGuest) showToast(t.guestWelcome, 'success');
             router.push(redirectTo);
             router.refresh();
         } catch {
-            showToast('No se pudo entrar como invitado. Inténtalo de nuevo.', 'error');
+            showToast(t.guestFailed, 'error');
             setLoading(false);
         }
     };
@@ -40,7 +42,7 @@ export function GuestAccessButton({ redirectTo = '/', variant = 'outline', class
     return (
         <Button type="button" variant={variant} size="lg" isLoading={loading} onClick={handleClick} className={className}>
             {!loading && <Sparkles size={18} aria-hidden />}
-            Probar sin registrarse
+            {isGuest ? t.continueAsGuest : t.tryAsGuest}
         </Button>
     );
 }

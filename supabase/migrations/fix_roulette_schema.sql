@@ -1,4 +1,4 @@
--- Schema for Russian Roulette multiplayer lobbies & invitations
+-- Schema for CineRuleta multiplayer lobbies & invitations
 -- This file is intended to be run in your Supabase project.
 
 -- 1) Main lobby table -------------------------------------------------------

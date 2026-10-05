@@ -1,22 +1,21 @@
-import type { NextConfig } from "next";
+import type { NextConfig } from 'next';
+
+const supabaseHost = process.env.NEXT_PUBLIC_SUPABASE_URL
+    ? new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).hostname
+    : undefined;
 
 const nextConfig: NextConfig = {
-  /** 
-   * Optimización de imágenes remotas (TMDB + Supabase)
-   * Esto permite usar `next/image` con las carátulas y avatares.
-   */
-  images: {
-    remotePatterns: [
-      {
-        protocol: "https",
-        hostname: "image.tmdb.org", // Posters de TMDB
-      },
-      {
-        protocol: "https",
-        hostname: "dhrkwrxplccmenochytg.supabase.co", // Avatares/medios almacenados en Supabase
-      },
-    ],
-  },
+    images: {
+        // Pósters de TMDB y avatares de Supabase Storage, optimizados por next/image
+        remotePatterns: [
+            { protocol: 'https', hostname: 'image.tmdb.org', pathname: '/t/p/**' },
+            ...(supabaseHost ? [{ protocol: 'https' as const, hostname: supabaseHost, pathname: '/storage/**' }] : []),
+        ],
+    },
+    // La configuración del feed ahora es un panel de la home
+    async redirects() {
+        return [{ source: '/setup', destination: '/?open=filters', permanent: true }];
+    },
 };
 
 export default nextConfig;

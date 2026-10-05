@@ -1,234 +1,193 @@
-import { PROVIDER_MAPPING } from '@/lib/constants';
-
-export interface TMDBItem {
-    id: number;
-    title?: string;
-    name?: string;
-    poster_path: string;
-    overview: string;
-    release_date?: string;
-    first_air_date?: string;
-    vote_average: number;
-    genre_ids: number[];
-}
-
-const TMDB_API_KEY = process.env.NEXT_PUBLIC_TMDB_API_KEY;
-const BASE_URL = 'https://api.themoviedb.org/3';
-
-export async function fetchContent(
-    type: 'movie' | 'tv',
-    region: string = 'ES',
-    providerIds: string[],
-    page: number = 1,
-    genreIds: string[] = [],
-    lang?: string
-) {
-    if (!TMDB_API_KEY) return null;
-
-    const processedIds = providerIds.flatMap(id => {
-        if (id === '384' || id === '118') {
-            return PROVIDER_MAPPING['HBO Max'].map(String);
-        }
-        return [id];
-    });
-    const providersString = processedIds.join('|');
-    const genresString = genreIds.join('|');
-
-    const endpoint = type === 'movie' ? 'discover/movie' : 'discover/tv';
-    const url = new URL(`${BASE_URL}/${endpoint}`);
-    url.searchParams.append('api_key', TMDB_API_KEY);
-    url.searchParams.append('language', lang ?? (region === 'ES' ? 'es-ES' : 'en-US'));
-    url.searchParams.append('sort_by', 'popularity.desc');
-    url.searchParams.append('watch_region', region);
-    if (providersString) url.searchParams.append('with_watch_providers', providersString);
-    if (genresString) url.searchParams.append('with_genres', genresString);
-    url.searchParams.append('page', page.toString());
-
-    try {
-        const res = await fetch(url.toString());
-        if (!res.ok) throw new Error('TMDB Fetch Failed');
-        const data = await res.json();
-        return data.results as TMDBItem[];
-    } catch { return null; }
-}
-
-export async function searchContent(query: string, type: 'movie' | 'tv' = 'movie') {
-    if (!TMDB_API_KEY || !query) return [];
-    const endpoint = type === 'movie' ? 'search/movie' : 'search/tv';
-    const url = new URL(`${BASE_URL}/${endpoint}`);
-    url.searchParams.append('api_key', TMDB_API_KEY);
-    url.searchParams.append('language', 'es-ES');
-    url.searchParams.append('query', query);
-    url.searchParams.append('page', '1');
-    try {
-        const res = await fetch(url.toString());
-        if (!res.ok) throw new Error('Search failed');
-        const data = await res.json();
-        return data.results as TMDBItem[];
-    } catch { return []; }
-}
-
-export async function fetchDetails(id: string, type: 'movie' | 'tv') {
-    if (!TMDB_API_KEY) return null;
-    try {
-        const res = await fetch(`${BASE_URL}/${type}/${id}?api_key=${TMDB_API_KEY}&language=es-ES`);
-        if (!res.ok) return null;
-        return await res.json() as TMDBItem;
-    } catch { return null; }
-}
-
-export const PROVIDER_NAMES: Record<string, string> = {
-    '8':    'Netflix',
-    '119':  'Prime Video',
-    '337':  'Disney+',
-    '384':  'Max',
-    '118':  'Max',
-    '1796': 'Max',
-    '1899': 'Max',
-    '283':  'Crunchyroll',
-    '2':    'Apple TV+',
-    '350':  'Apple TV+',
-    '149':  'Filmin',
-    '167':  'Movistar+',
-};
+import { buildPlatformSearchUrl, expandProviderIds, findProvider, normalizeProviderName, providerName } from '@/lib/providers';
+import type {
+    ContentType, Movie, TMDBDetails, TMDBListItem, TMDBPaged, TMDBWatchProvidersResponse, WatchProvider,
+} from '@/types';
 
 /**
- * Construye una URL de búsqueda en la plataforma a partir del nombre del proveedor.
- * Se usa cuando JustWatch GraphQL no devuelve link directo.
- * Crunchyroll se trata aquí porque NO está indexado en JustWatch.
+ * Cliente de TMDB del navegador. Todas las peticiones pasan por /api/tmdb,
+ * que añade la clave en el servidor y cachea las respuestas.
  */
-export function buildPlatformSearchUrl(providerName: string, title: string): string {
-    const q = encodeURIComponent(title);
-    const n = providerName.toLowerCase();
 
-    if (n.includes('netflix'))              return `https://www.netflix.com/search?q=${q}`;
-    if (n.includes('prime') || n.includes('amazon')) return `https://www.primevideo.com/search?phrase=${q}`;
-    if (n.includes('disney'))              return `https://www.disneyplus.com/search/${q}`;
-    if (n.includes('max') || n.includes('hbo')) return `https://www.max.com/search?q=${q}`;
-    if (n.includes('crunchyroll'))         return `https://www.crunchyroll.com/search?q=${q}`;
-    if (n.includes('apple'))               return `https://tv.apple.com/search?term=${q}`;
-    if (n.includes('filmin'))              return `https://www.filmin.es/buscar?q=${q}`;
-    if (n.includes('movistar'))            return `https://ver.movistarplus.es/busqueda/?q=${q}`;
+type QueryValue = string | number | undefined | null;
 
-    // Fallback genérico con Google
-    return `https://www.google.com/search?q=ver+${q}+en+${encodeURIComponent(providerName)}`;
-}
+/** Límite de peticiones simultáneas a la API (TMDB limita por segundo) */
+const MAX_CONCURRENT_REQUESTS = 8;
+let activeRequests = 0;
+const waitingQueue: (() => void)[] = [];
 
-export interface WatchLinkResult {
-    link: string | null;
-    providerName: string | null;
-    /** Lista de plataformas con search URL propia (nunca JustWatch page) */
-    providers: { name: string; link: string }[];
-    /** Link de JustWatch del contenido concreto (para usarlo solo como fuente de datos) */
-    justwatchLink: string | null;
-}
-
-/**
- * Obtiene las plataformas donde se puede ver un título.
- * - `providers[].link` → URL de búsqueda directa en la plataforma (no JustWatch)
- * - `justwatchLink`   → URL de JustWatch del contenido (solo como fuente de verdad extra)
- */
-export async function getWatchLink(
-    id: string,
-    type: 'movie' | 'tv',
-    preferredProviderIds: string[] = [],
-    region: string = 'ES',
-    title?: string
-): Promise<WatchLinkResult> {
-    if (!TMDB_API_KEY) return { link: null, providerName: null, providers: [], justwatchLink: null };
-
+async function withConcurrencyLimit<T>(task: () => Promise<T>): Promise<T> {
+    if (activeRequests >= MAX_CONCURRENT_REQUESTS) {
+        await new Promise<void>(resolve => waitingQueue.push(resolve));
+    }
+    activeRequests++;
     try {
-        const res = await fetch(`${BASE_URL}/${type}/${id}/watch/providers?api_key=${TMDB_API_KEY}`);
-        const data = await res.json();
-        const results = data.results?.[region] || data.results?.US;
-
-        if (!results) return { link: null, providerName: null, providers: [], justwatchLink: null };
-
-        const justwatchLink: string | null = results.link || null;
-        const allProviders: any[] = results.flatrate || [];
-
-        // Search URLs por plataforma — nunca JustWatch page como destino
-        const seen = new Set<string>();
-        const availableProviders = allProviders
-            .map((p: any) => {
-                const name = PROVIDER_NAMES[p.provider_id.toString()] || p.provider_name;
-                return {
-                    name,
-                    link: title
-                        ? buildPlatformSearchUrl(name, title)
-                        : (justwatchLink ?? `https://www.google.com/search?q=ver+${encodeURIComponent(title ?? name)}+online`),
-                };
-            })
-            .filter(p => {
-                if (seen.has(p.name)) return false;
-                seen.add(p.name);
-                return true;
-            });
-
-        const expandedPreferred = preferredProviderIds.flatMap(pid =>
-            (pid === '384' || pid === '118') ? ['384', '118', '1796'] : [pid]
-        );
-        const match = allProviders.find((p: any) => expandedPreferred.includes(p.provider_id.toString()));
-        const best = match || (allProviders.length > 0 ? allProviders[0] : null);
-
-        const mainName = best
-            ? (PROVIDER_NAMES[best.provider_id.toString()] || best.provider_name)
-            : null;
-        const mainLink = (mainName && title)
-            ? buildPlatformSearchUrl(mainName, title)
-            : justwatchLink;
-
-        return { link: mainLink, providerName: mainName, providers: availableProviders, justwatchLink };
-
-    } catch {
-        return { link: null, providerName: null, providers: [], justwatchLink: null };
+        return await task();
+    } finally {
+        activeRequests--;
+        waitingQueue.shift()?.();
     }
 }
 
-// Advanced Discover for Affinity Test
-export async function discoverContent(type: 'movie' | 'tv', params: {
-    with_genres?: string;
-    without_genres?: string;
-    release_date_gte?: string;
-    release_date_lte?: string;
-    with_runtime_lte?: string;
-    with_runtime_gte?: string;
-    sort_by?: string;
-    vote_count_gte?: string;
-    vote_average_gte?: string;
-    vote_average_lte?: string;
-    with_watch_providers?: string;
+async function tmdbGet<T>(endpoint: string, query: Record<string, QueryValue> = {}): Promise<T | null> {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+    });
+    const qs = params.toString();
+
+    return withConcurrencyLimit(async () => {
+        try {
+            const res = await fetch(`/api/tmdb/${endpoint}${qs ? `?${qs}` : ''}`);
+            return res.ok ? ((await res.json()) as T) : null;
+        } catch {
+            return null;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Catálogo
+// ---------------------------------------------------------------------------
+
+/** Parámetros de /discover con los nombres exactos que espera TMDB */
+export interface DiscoverParams {
+    language: string;
     watch_region?: string;
     page?: number;
-    lang?: string;
-}) {
-    if (!TMDB_API_KEY) return [];
+    sort_by?: string;
+    /** IDs principales de plataforma; se expanden a todos sus alias */
+    providers?: string[];
+    with_genres?: string;
+    without_genres?: string;
+    'primary_release_date.gte'?: string;
+    'primary_release_date.lte'?: string;
+    'first_air_date.gte'?: string;
+    'first_air_date.lte'?: string;
+    'with_runtime.gte'?: number;
+    'with_runtime.lte'?: number;
+    'vote_count.gte'?: number;
+    'vote_average.gte'?: number;
+    'vote_average.lte'?: number;
+}
 
-    const endpoint = type === 'movie' ? 'discover/movie' : 'discover/tv';
-    const url = new URL(`${BASE_URL}/${endpoint}`);
-    url.searchParams.append('api_key', TMDB_API_KEY);
-    url.searchParams.append('language', params.lang ?? 'es-ES');
-    url.searchParams.append('sort_by', params.sort_by || 'popularity.desc');
-    url.searchParams.append('watch_region', params.watch_region || 'ES');
+export async function discover(type: ContentType, params: DiscoverParams): Promise<TMDBListItem[]> {
+    const { providers, ...rest } = params;
+    const data = await tmdbGet<TMDBPaged<TMDBListItem>>(`discover/${type}`, {
+        sort_by: 'popularity.desc',
+        ...rest,
+        with_watch_providers: providers?.length ? expandProviderIds(providers).join('|') : undefined,
+    });
+    return data?.results ?? [];
+}
 
-    if (params.with_genres) url.searchParams.append('with_genres', params.with_genres);
-    if (params.without_genres) url.searchParams.append('without_genres', params.without_genres);
-    if (params.with_watch_providers) url.searchParams.append('with_watch_providers', params.with_watch_providers);
+export async function searchContent(query: string, type: ContentType, language: string): Promise<TMDBListItem[]> {
+    if (!query.trim()) return [];
+    const data = await tmdbGet<TMDBPaged<TMDBListItem>>(`search/${type}`, { query: query.trim(), language, page: 1 });
+    return data?.results ?? [];
+}
 
-    const dateField = type === 'movie' ? 'primary_release_date' : 'first_air_date';
-    if (params.release_date_gte) url.searchParams.append(`${dateField}.gte`, params.release_date_gte);
-    if (params.release_date_lte) url.searchParams.append(`${dateField}.lte`, params.release_date_lte);
-    if (params.with_runtime_lte) url.searchParams.append('with_runtime.lte', params.with_runtime_lte);
-    if (params.with_runtime_gte) url.searchParams.append('with_runtime.gte', params.with_runtime_gte);
-    if (params.vote_count_gte) url.searchParams.append('vote_count.gte', params.vote_count_gte);
-    if (params.vote_average_gte) url.searchParams.append('vote_average.gte', params.vote_average_gte);
-    if (params.vote_average_lte) url.searchParams.append('vote_average.lte', params.vote_average_lte);
-    url.searchParams.append('page', (params.page || 1).toString());
+/** Caché de detalles por sesión: deduplica también peticiones simultáneas */
+const detailsCache = new Map<string, Promise<TMDBDetails | null>>();
 
+export function fetchDetails(
+    id: string,
+    type: ContentType,
+    language: string,
+    options: { withCredits?: boolean } = {},
+): Promise<TMDBDetails | null> {
+    const key = `${type}/${id}/${language}/${options.withCredits ? 'credits' : ''}`;
+    const cached = detailsCache.get(key);
+    if (cached) return cached;
+
+    const request = tmdbGet<TMDBDetails>(`${type}/${id}`, {
+        language,
+        append_to_response: options.withCredits ? 'credits' : undefined,
+    }).then(result => {
+        if (!result) detailsCache.delete(key); // no cachear errores
+        return result;
+    });
+    detailsCache.set(key, request);
+    return request;
+}
+
+// ---------------------------------------------------------------------------
+// Dónde ver un título
+// ---------------------------------------------------------------------------
+
+type WatchTarget = Pick<Movie, 'id' | 'type' | 'title'>;
+
+/** Plataformas de suscripción según TMDB, con enlace de búsqueda en cada una */
+async function fetchTmdbProviders(movie: WatchTarget, region: string): Promise<WatchProvider[]> {
+    const data = await tmdbGet<TMDBWatchProvidersResponse>(`${movie.type}/${movie.id}/watch/providers`);
+    const flatrate = data?.results?.[region]?.flatrate ?? [];
+
+    const seen = new Set<string>();
+    return flatrate
+        .map(p => providerName(p.provider_id, p.provider_name))
+        .filter(name => !seen.has(name) && !!seen.add(name))
+        .map(name => ({ name, link: buildPlatformSearchUrl(name, movie.title) }));
+}
+
+/** Enlaces directos al título en cada plataforma (proxy de JustWatch) */
+async function fetchDirectLinks(movie: WatchTarget, region: string): Promise<WatchProvider[]> {
     try {
-        const res = await fetch(url.toString());
-        if (!res.ok) throw new Error('Discover failed');
-        const data = await res.json();
-        return data.results as TMDBItem[];
-    } catch { return []; }
+        const res = await fetch('/api/justwatch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tmdbId: movie.id, type: movie.type, title: movie.title, country: region }),
+        });
+        if (!res.ok) return [];
+        const data = (await res.json()) as { providers?: WatchProvider[] };
+        return data.providers ?? [];
+    } catch {
+        return [];
+    }
+}
+
+export interface WatchOptions {
+    /** Plataformas donde está el título: enlace directo si existe, si no, búsqueda en la plataforma */
+    providers: WatchProvider[];
+    /** La mejor opción para el usuario: una de sus plataformas si la hay, si no la primera */
+    best: WatchProvider | null;
+}
+
+const watchCache = new Map<string, Promise<WatchOptions>>();
+
+export function getWatchOptions(
+    movie: WatchTarget,
+    region: string,
+    preferredProviderIds: string[] = [],
+): Promise<WatchOptions> {
+    const key = `${movie.type}/${movie.id}/${region}`;
+    let request = watchCache.get(key);
+    if (!request) {
+        request = Promise.all([fetchTmdbProviders(movie, region), fetchDirectLinks(movie, region)])
+            .then(([listed, direct]) => {
+                const directByName = new Map(direct.map(d => [normalizeProviderName(d.name), d.link]));
+                const providers = listed.length > 0
+                    ? listed.map(p => ({ name: p.name, link: directByName.get(normalizeProviderName(p.name)) ?? p.link }))
+                    : direct;
+                return { providers, best: null };
+            });
+        watchCache.set(key, request);
+    }
+
+    return request.then(({ providers }) => {
+        const preferredNames = new Set(
+            preferredProviderIds.map(id => findProvider(id)?.name).filter((name): name is string => !!name),
+        );
+        const best = providers.find(p => preferredNames.has(p.name)) ?? providers[0] ?? null;
+        return { providers, best };
+    });
+}
+
+/** Devuelve la película con sus plataformas y el enlace principal rellenados */
+export async function withWatchInfo<T extends Movie>(movie: T, region: string, preferredProviderIds: string[]): Promise<T> {
+    const { providers, best } = await getWatchOptions(movie, region, preferredProviderIds);
+    return {
+        ...movie,
+        providers,
+        providerName: best?.name ?? movie.providerName,
+        watchLink: best?.link ?? movie.watchLink,
+    };
 }

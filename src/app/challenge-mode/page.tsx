@@ -1,432 +1,234 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useId, useState } from 'react';
+import Link from 'next/link';
+import { Check, Circle, Search, Swords, Users } from 'lucide-react';
 import { useChallenge } from '@/context/ChallengeContext';
-import { searchContent, getWatchLink } from '@/services/tmdb';
-import { Movie } from '@/lib/data';
-import { useFriends } from '@/hooks/useFriends';
+import { useFriends } from '@/context/FriendsContext';
 import { useUser } from '@/context/UserContext';
 import { useLanguage } from '@/context/LanguageContext';
-import { buildPlatformSearchUrl } from '@/services/tmdb';
-import BackButton from '@/components/ui/BackButton';
+import { useToast } from '@/components/ui/Toast';
+import { searchContent } from '@/services/tmdb';
+import { tmdbItemToMovie } from '@/lib/movies';
+import { toTmdbLang } from '@/lib/region';
+import { GameHeader } from '@/components/layout/GameHeader';
+import { Tabs } from '@/components/ui/Tabs';
+import { Button, buttonVariants } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { Poster } from '@/components/ui/Poster';
+import { Avatar } from '@/components/ui/Avatar';
+import { Spinner } from '@/components/ui/Spinner';
+import { EmptyState } from '@/components/ui/EmptyState';
 import MovieDetailsModal from '@/components/MovieDetailsModal';
-import { Swords, Search, Check, Circle, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { ChallengeRow } from '@/components/challenges/ChallengeRow';
+import type { ContentType, Movie } from '@/types';
+
+type Tab = 'send' | 'received' | 'sent';
 
 export default function ChallengeModePage() {
-    const router = useRouter();
-    const { sendChallenge, sentChallenges, pendingChallenges, receivedChallenges } = useChallenge();
+    const { sendChallenge, sentChallenges, receivedChallenges, resolveChallenge } = useChallenge();
     const { friends, loading: friendsLoading } = useFriends();
-    const { platforms } = useUser();
-    const { t } = useLanguage();
-    const [activeTab, setActiveTab] = useState<'send' | 'received' | 'sent'>('send');
+    const { addLike } = useUser();
+    const { t, language } = useLanguage();
+    const { showToast } = useToast();
+    const searchId = useId();
 
-    // Send Tab State
+    const [tab, setTab] = useState<Tab>('send');
     const [query, setQuery] = useState('');
-    const [searchResults, setSearchResults] = useState<any[]>([]);
+    const [searchType, setSearchType] = useState<ContentType>('movie');
+    const [results, setResults] = useState<Movie[] | null>(null);
+    const [searching, setSearching] = useState(false);
     const [selectedMovie, setSelectedMovie] = useState<Movie | null>(null);
     const [selectedFriends, setSelectedFriends] = useState<string[]>([]);
-    
-    // Details Modal State
-    const [showDetailsModal, setShowDetailsModal] = useState(false);
-    const [selectedChallengeMovie, setSelectedChallengeMovie] = useState<Movie | null>(null);
+    const [sending, setSending] = useState(false);
+    const [detailsMovie, setDetailsMovie] = useState<Movie | null>(null);
 
     const handleSearch = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!query.trim()) return;
-        const results = await searchContent(query);
-        setSearchResults(results || []);
-    };
-
-    const handleSelectMovie = (item: any) => {
-        // Map TMDB result to our Movie interface
-        const movie: Movie = {
-            id: item.id.toString(),
-            title: item.title || item.name,
-            image: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : '',
-            year: parseInt((item.release_date || item.first_air_date || '0').split('-')[0]),
-            type: item.media_type || 'movie',
-            rating: item.vote_average,
-            synopsis: item.overview,
-            synopsis_es: item.overview, // Fallback
-            genres: item.genre_ids
-        };
-        setSelectedMovie(movie);
-        setSelectedFriends([]); // Reset selected friends when selecting a new movie
-    };
-
-    const handleToggleFriend = (friendId: string) => {
-        setSelectedFriends(prev => {
-            if (prev.includes(friendId)) {
-                return prev.filter(id => id !== friendId);
-            } else {
-                return [...prev, friendId];
-            }
-        });
-    };
-
-    const handleWatchNow = async (movie: Movie) => {
-        const region = typeof navigator !== 'undefined' ? (navigator.language.split('-')[1]?.toUpperCase() || 'ES') : 'ES';
+        setSearching(true);
         try {
-            const { providers } = await getWatchLink(movie.id, movie.type || 'movie', platforms || [], region, movie.title);
-            const link = providers.length > 0
-                ? providers[0].link
-                : buildPlatformSearchUrl('', movie.title) || `https://www.google.com/search?q=ver+${encodeURIComponent(movie.title)}+online`;
-            window.open(link, '_blank', 'noopener,noreferrer');
-        } catch {
-            window.open(`https://www.google.com/search?q=ver+${encodeURIComponent(movie.title)}+online`, '_blank', 'noopener,noreferrer');
+            const items = await searchContent(query, searchType, toTmdbLang(language));
+            setResults(items.map(item => tmdbItemToMovie(item, searchType, language)));
+        } finally {
+            setSearching(false);
         }
     };
 
-    const handleViewDetails = (movie: Movie) => {
-        setSelectedChallengeMovie(movie);
-        setShowDetailsModal(true);
-    };
-
-    const handleSendChallenges = async () => {
+    const handleSend = async () => {
         if (!selectedMovie || selectedFriends.length === 0) return;
-        
-        try {
-            let successCount = 0;
-            let errorCount = 0;
-            
-            // Enviar reto a todos los amigos seleccionados
-            for (const friendId of selectedFriends) {
-                try {
-                    await sendChallenge(selectedMovie, friendId);
-                    successCount++;
-                } catch (error: any) {
-                    console.error('Error al enviar reto:', error);
-                    errorCount++;
-                }
-            }
-            
-            // No limpiar si todos fallaron
-            if (successCount === 0) return;
-            
-            // Limpiar estado
+        setSending(true);
+        const outcomes = await Promise.allSettled(
+            selectedFriends.map(id => sendChallenge(selectedMovie, id, friends.find(f => f.id === id)?.username ?? '')),
+        );
+        setSending(false);
+        const ok = outcomes.filter(o => o.status === 'fulfilled').length;
+        const failed = outcomes.length - ok;
+        showToast(t.challengesSent(ok, failed), failed === 0 ? 'success' : ok > 0 ? 'info' : 'error');
+        if (ok > 0) {
             setSelectedMovie(null);
             setSelectedFriends([]);
-            setQuery('');
-            setSearchResults([]);
-            setActiveTab('send'); // Volver a la pantalla principal de envío
-        } catch (error: any) {
-            console.error('Error al enviar retos:', error);
+            setTab('sent');
         }
     };
 
+    const handleResolve = async (challengeId: string, movie: Movie, accepted: boolean) => {
+        const ok = await resolveChallenge(challengeId, accepted);
+        if (!ok) {
+            showToast(t.genericError, 'error');
+        } else if (accepted) {
+            await addLike(movie); // igual que al aceptar desde el feed
+            showToast(t.challengeAccepted, 'success');
+        }
+    };
+
+    const toggleFriend = (id: string) =>
+        setSelectedFriends(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+
+    const noFriends = !friendsLoading && friends.length === 0;
+
+    const sendTab = noFriends ? (
+        <EmptyState
+            icon={Users}
+            title={t.needFriendsToChallenge}
+            action={<Link href="/profile" className={buttonVariants({ size: 'lg' })}>{t.goToProfile}</Link>}
+        />
+    ) : !selectedMovie ? (
+        <>
+            <form onSubmit={handleSearch} className="mb-5 flex flex-wrap gap-2.5">
+                <label htmlFor={searchId} className="sr-only">{t.searchMovieToChallenge}</label>
+                <select
+                    aria-label={t.mediaTypeLabel}
+                    value={searchType}
+                    onChange={e => setSearchType(e.target.value as ContentType)}
+                    className="field-select"
+                >
+                    <option value="movie">{t.movies}</option>
+                    <option value="tv">{t.tvShows}</option>
+                </select>
+                <Input id={searchId} value={query} onChange={e => setQuery(e.target.value)} placeholder={t.challengeSearchPlaceholder} className="min-w-[160px] flex-1" />
+                <Button type="submit" variant="outline" size="icon-lg" isLoading={searching} aria-label={t.search}>
+                    <Search size={20} aria-hidden />
+                </Button>
+            </form>
+            {searching ? (
+                <Spinner label={t.searching} />
+            ) : results === null ? (
+                <EmptyState icon={Swords} title={t.challengeSearchTitle} hint={t.challengeSearchHint} />
+            ) : results.length === 0 ? (
+                <p className="text-center text-sm text-[var(--muted-foreground)]">{t.noSearchResults}</p>
+            ) : (
+                <ul className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-4">
+                    {results.map(movie => (
+                        <li key={movie.id}>
+                            <button
+                                type="button"
+                                onClick={() => { setSelectedMovie(movie); setSelectedFriends([]); }}
+                                aria-label={movie.title}
+                                className="relative block aspect-[2/3] w-full overflow-hidden rounded-xl transition-transform hover:scale-105"
+                            >
+                                <Poster src={movie.image} alt="" sizes="120px" />
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </>
+    ) : (
+        <div className="rounded-3xl border border-[var(--border)] bg-[var(--card)] p-5 text-center animate-pop-in">
+            <div className="relative mx-auto mb-4 aspect-[2/3] w-[120px] overflow-hidden rounded-xl border-2 border-[var(--secondary)] shadow-[var(--shadow-lg)]">
+                <Poster src={selectedMovie.image} alt="" sizes="120px" />
+            </div>
+            <h2 className="mb-1 font-display text-2xl font-extrabold leading-tight">{selectedMovie.title}</h2>
+            <p className="eyebrow mb-6 text-[var(--secondary)]">{t.whoToChallenge}</p>
+
+            {friendsLoading ? (
+                <Spinner label={t.loadingFriends} />
+            ) : (
+                <ul className="mb-5 grid gap-2.5">
+                    {friends.map(friend => {
+                        const isSelected = selectedFriends.includes(friend.id);
+                        return (
+                            <li key={friend.id}>
+                                <button
+                                    type="button"
+                                    aria-pressed={isSelected}
+                                    onClick={() => toggleFriend(friend.id)}
+                                    className={`flex w-full items-center justify-between rounded-2xl border p-3.5 transition-colors ${isSelected ? 'border-2 border-[var(--secondary)] bg-[var(--secondary-soft)]' : 'border-[var(--border-strong)] hover:border-[var(--secondary)]'}`}
+                                >
+                                    <span className="flex items-center gap-2.5">
+                                        <Avatar src={friend.avatar_url} name={friend.username} size={32} />
+                                        <span className="font-semibold">{friend.username || t.unknownUser}</span>
+                                    </span>
+                                    {isSelected ? <Check size={20} strokeWidth={3} aria-hidden /> : <Circle size={20} aria-hidden />}
+                                </button>
+                            </li>
+                        );
+                    })}
+                </ul>
+            )}
+
+            <Button size="lg" className="mb-3 w-full" disabled={selectedFriends.length === 0} isLoading={sending} onClick={() => void handleSend()}>
+                <Swords size={20} aria-hidden /> {t.sendChallengeTo(selectedFriends.length)}
+            </Button>
+            <button type="button" onClick={() => setSelectedMovie(null)} className="text-sm text-[var(--muted-foreground)] underline">
+                {t.pickAnotherMovie}
+            </button>
+        </div>
+    );
+
     return (
-        <div style={{ height: '100vh', background: 'var(--background)', color: 'white', display: 'flex', flexDirection: 'column' }}>
-            {/* Header */}
-            <div style={{ padding: '20px', background: 'var(--card)', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-                <BackButton className="absolute left-5 top-1/2 transform -translate-y-1/2" />
-                <h1 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 900, letterSpacing: '1px' }}>
-                    <span className="inline-flex items-center gap-2"><Swords size={24} className="text-[var(--secondary)]" aria-hidden /> {t.challengeCenter}</span>
-                </h1>
-            </div>
+        <div className="flex min-h-full flex-1 flex-col bg-[var(--background)] text-[var(--foreground)]">
+            <GameHeader mode="challenge" title={t.challengeCenter} />
 
-            {/* Tabs */}
-            <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
-                <button
-                    onClick={() => setActiveTab('send')}
-                    style={{
-                        flex: 1,
-                        padding: '14px',
-                        background: activeTab === 'send' ? 'var(--background)' : 'transparent',
-                        border: 'none',
-                        color: activeTab === 'send' ? 'var(--secondary)' : 'var(--muted-foreground)',
-                        fontWeight: 'bold',
-                        borderBottom: activeTab === 'send' ? '2px solid var(--secondary)' : 'none',
-                        transition: 'all 0.3s'
-                    }}
-                >
-                    {t.sendChallenge}
-                </button>
-                <button
-                    onClick={() => setActiveTab('received')}
-                    style={{
-                        flex: 1, padding: '15px', background: 'none', border: 'none',
-                        color: activeTab === 'received' ? 'var(--secondary)' : 'var(--muted-foreground)',
-                        fontWeight: 'bold', borderBottom: activeTab === 'received' ? '2px solid var(--secondary)' : 'none',
-                        transition: 'all 0.3s'
-                    }}
-                >
-                    {t.myChallenges}
-                </button>
-                <button
-                    onClick={() => setActiveTab('sent')}
-                    style={{
-                        flex: 1, padding: '15px', background: 'none', border: 'none',
-                        color: activeTab === 'sent' ? 'var(--secondary)' : 'var(--muted-foreground)',
-                        fontWeight: 'bold', borderBottom: activeTab === 'sent' ? '2px solid var(--secondary)' : 'none',
-                        transition: 'all 0.3s'
-                    }}
-                >
-                    {t.sentChallenges}
-                </button>
-            </div>
+            <Tabs<Tab>
+                label={t.challengeTabsLabel}
+                className="px-5 pb-3"
+                value={tab}
+                onChange={setTab}
+                items={[
+                    { id: 'send', label: t.sendChallenge },
+                    { id: 'received', label: t.myChallenges },
+                    { id: 'sent', label: t.sentChallenges },
+                ]}
+            />
 
-            {/* Content - padding-bottom para que al hacer scroll llegue hasta el BottomNav */}
-            <div
-                className="custom-scrollbar"
-                style={{
-                    flex: 1,
-                    overflowY: 'auto',
-                    padding: '20px',
-                    paddingBottom: 'calc(20px + 72px + env(safe-area-inset-bottom, 0))',
-                }}
-            >
-                {activeTab === 'send' ? (
-                    <div className="animate-fade-in">
-                        {/* Search */}
-                        <form onSubmit={handleSearch} style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-                            <input
-                                type="text"
-                                value={query}
-                                onChange={e => setQuery(e.target.value)}
-                                placeholder={t.searchMovieToChallenge}
-                                style={{
-                                    flex: 1, padding: '15px', borderRadius: '12px', border: '2px solid var(--border)',
-                                    background: 'var(--card)', color: 'var(--foreground)', fontSize: '1rem'
-                                }}
-                            />
-                            <button type="submit" style={{ padding: '0 20px', borderRadius: '12px', background: 'var(--secondary)', color: 'var(--background)', border: 'none', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Search size={22} aria-hidden /></button>
-                        </form>
-
-                        {/* Results */}
-                        {!selectedMovie ? (
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '15px' }}>
-                                {searchResults.map(item => (
-                                    <div key={item.id} onClick={() => handleSelectMovie(item)} style={{ cursor: 'pointer', transition: 'transform 0.2s' }} onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.05)'} onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}>
-                                        <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', aspectRatio: '2/3' }}>
-                                            <img
-                                                src={item.poster_path ? `https://image.tmdb.org/t/p/w200${item.poster_path}` : 'https://via.placeholder.com/200x300'}
-                                                alt={item.title}
-                                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                                            />
-                                        </div>
-                                    </div>
+            <div role="tabpanel" className="custom-scrollbar mx-auto w-full max-w-4xl flex-1 overflow-y-auto p-5 pb-24 animate-fade-in">
+                {tab === 'send' && sendTab}
+                {tab === 'received' && (
+                    receivedChallenges.length === 0
+                        ? <EmptyState icon={Swords} title={t.noReceivedChallenges} />
+                        : (
+                            <ul className="flex flex-col gap-3">
+                                {receivedChallenges.map(c => (
+                                    <li key={c.id}>
+                                        <ChallengeRow
+                                            challenge={c}
+                                            direction="received"
+                                            onOpenDetails={() => setDetailsMovie(c.movie)}
+                                            onResolve={accepted => void handleResolve(c.id, c.movie, accepted)}
+                                        />
+                                    </li>
                                 ))}
-                            </div>
-                        ) : (
-                            <div className="animate-pop-in">
-                                {/* Selected Movie & Friend Picker */}
-                                <div style={{ background: 'var(--card)', padding: '20px', borderRadius: '24px', textAlign: 'center', border: '1px solid var(--border)' }}>
-                                    <div style={{
-                                        width: '120px', borderRadius: '12px', overflow: 'hidden', margin: '0 auto 15px',
-                                        boxShadow: '0 10px 30px rgba(0,0,0,0.5)', border: '2px solid var(--secondary)'
-                                    }}>
-                                        <img src={selectedMovie.image} alt="Selected" style={{ width: '100%', display: 'block' }} />
-                                    </div>
-                                    <h3 style={{ fontSize: '1.2rem', marginBottom: '5px' }}>{selectedMovie.title}</h3>
-                                    <p style={{ color: 'var(--secondary)', fontWeight: 'bold', marginBottom: '25px', fontSize: '0.9rem' }}>{t.whoToChallenge}</p>
-
-                                    <div style={{ display: 'grid', gap: '10px', marginBottom: '20px' }}>
-                                        {friendsLoading ? (
-                                            <p className="text-[var(--muted-foreground)] animate-pulse">{t.loadingFriends}</p>
-                                        ) : friends.length === 0 ? (
-                                            <p className="text-[var(--muted-foreground)]">{t.noFriendsYet || "No tienes amigos agregados aún. ¡Invita a alguien desde tu perfil!"}</p>
-                                        ) : (
-                                            friends.map(friend => {
-                                                const isSelected = selectedFriends.includes(friend.id);
-                                                return (
-                                                    <button
-                                                        key={friend.id}
-                                                        onClick={() => handleToggleFriend(friend.id)}
-                                                        style={{
-                                                            padding: '15px', borderRadius: '16px', 
-                                                            border: isSelected ? '2px solid var(--secondary)' : '1px solid var(--border)',
-                                                            background: isSelected ? 'var(--muted)' : 'var(--card)', 
-                                                            color: 'var(--foreground)', fontSize: '1rem', cursor: 'pointer',
-                                                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                                            transition: 'all 0.2s'
-                                                        }}
-                                                        onMouseEnter={e => { 
-                                                            if (!isSelected) {
-                                                                e.currentTarget.style.background = 'var(--border)'; 
-                                                                e.currentTarget.style.borderColor = 'var(--secondary)';
-                                                            }
-                                                        }}
-                                                        onMouseLeave={e => { 
-                                                            if (!isSelected) {
-                                                                e.currentTarget.style.background = 'var(--card)'; 
-                                                                e.currentTarget.style.borderColor = 'var(--border)';
-                                                            }
-                                                        }}
-                                                    >
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                                            <div style={{ 
-                                                                width: '30px', 
-                                                                height: '30px', 
-                                                                borderRadius: '50%', 
-                                                                overflow: 'hidden', 
-                                                                background: isSelected ? 'var(--secondary)' : 'var(--border)',
-                                                                border: isSelected ? '2px solid var(--secondary)' : 'none'
-                                                            }}>
-                                                                {friend.avatar_url ? (
-                                                                    <img src={friend.avatar_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                                                ) : (
-                                                                    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: isSelected ? 'black' : 'white', fontWeight: 'bold' }}>
-                                                                        {(friend.username || '?')[0].toUpperCase()}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                            <span style={{ fontWeight: 600 }}>{friend.username || 'Sin nombre'}</span>
-                                                        </div>
-                                                        <span style={{ fontSize: '1.2rem' }}>
-                                                            {isSelected ? <Check size={20} strokeWidth={3} aria-hidden /> : <Circle size={20} strokeWidth={2} aria-hidden />}
-                                                        </span>
-                                                    </button>
-                                                );
-                                            })
-                                        )}
-                                    </div>
-
-                                    {/* Botón de enviar reto - solo visible cuando hay amigos seleccionados */}
-                                    {selectedFriends.length > 0 && (
-                                        <button
-                                            onClick={handleSendChallenges}
-                                            style={{
-                                                width: '100%',
-                                                padding: '15px',
-                                                borderRadius: '16px',
-                                                background: 'var(--secondary)',
-                                                color: 'var(--background)',
-                                                border: 'none',
-                                                fontSize: '1.1rem',
-                                                fontWeight: 'bold',
-                                                cursor: 'pointer',
-                                                marginBottom: '15px',
-                                                transition: 'all 0.2s'
-                                            }}
-                                            onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.02)'}
-                                            onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
-                                        >
-                                            <Swords size={20} className="inline-block mr-2 -mt-0.5" aria-hidden /> Enviar Reto a {selectedFriends.length} {selectedFriends.length === 1 ? 'Amigo' : 'Amigos'}
-                                        </button>
-                                    )}
-
-                                    <button
-                                        onClick={() => {
-                                            setSelectedMovie(null);
-                                            setSelectedFriends([]);
-                                        }}
-                                        style={{ marginTop: '10px', background: 'none', border: 'none', color: 'var(--muted-foreground)', textDecoration: 'underline', cursor: 'pointer' }}
-                                    >
-                                        {t.cancel}
-                                    </button>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                ) : activeTab === 'received' ? (
-                    <div className="animate-fade-in flex flex-col gap-3 w-full max-w-4xl mx-auto">
-                        {receivedChallenges.length === 0 && <p className="text-center text-[var(--muted-foreground)]">{t.noReceivedChallenges}</p>}
-                        {receivedChallenges.map(challenge => (
-                            <div
-                                key={challenge.id}
-                                className="relative w-full max-w-4xl mx-auto rounded-xl p-3 flex gap-3 items-center overflow-hidden"
-                                style={{
-                                    background: 'var(--card)',
-                                    border: challenge.status === 'pending' ? '1px solid var(--secondary)' : '1px solid rgba(255,255,255,0.05)',
-                                }}
-                            >
-                                <img
-                                    src={challenge.movie.image}
-                                    alt={challenge.movie.title}
-                                    onClick={() => handleViewDetails(challenge.movie)}
-                                    className="w-12 h-16 sm:w-14 sm:h-20 object-cover rounded shrink-0 bg-[var(--border)] cursor-pointer hover:opacity-80 transition-opacity"
-                                />
-                                <div className="flex flex-col flex-1 min-w-0 justify-center gap-2">
-                                    <div>
-                                        <h4 className="text-sm sm:text-base font-bold text-white truncate leading-tight pr-1">{challenge.movie.title}</h4>
-                                        <p className="text-xs text-[var(--muted-foreground)] truncate">
-                                            De: <span className="text-[var(--foreground)] font-bold">{challenge.sender}</span>
-                                            <span className="hidden min-[350px]:inline"> · {new Date(challenge.timestamp).toLocaleDateString()}</span>
-                                        </p>
-                                    </div>
-                                    <div className="flex flex-wrap gap-2 mt-0.5">
-                                        <button
-                                            onClick={() => handleWatchNow(challenge.movie)}
-                                            className="text-[10px] sm:text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap transition hover:opacity-90"
-                                            style={{
-                                                background: 'var(--secondary)',
-                                                color: 'var(--background)',
-                                                border: 'none',
-                                                cursor: 'pointer',
-                                            }}
-                                        >
-                                            {t.watchNow}
-                                        </button>
-                                        <button
-                                            onClick={() => handleViewDetails(challenge.movie)}
-                                            className="text-[10px] sm:text-xs px-3 py-1.5 rounded-lg whitespace-nowrap transition"
-                                            style={{
-                                                background: 'transparent',
-                                                color: 'var(--foreground)',
-                                                border: '1px solid rgba(255,255,255,0.2)',
-                                                cursor: 'pointer',
-                                            }}
-                                            onMouseEnter={e => {
-                                                e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
-                                            }}
-                                            onMouseLeave={e => {
-                                                e.currentTarget.style.background = 'transparent';
-                                            }}
-                                        >
-                                            {t.details}
-                                        </button>
-                                    </div>
-                                </div>
-                                <div className="shrink-0 text-[var(--secondary)] ml-1">
-                                    {challenge.status === 'pending' ? <Clock size={20} className="text-[var(--muted-foreground)]" aria-hidden /> :
-                                        challenge.status === 'accepted' ? <CheckCircle size={20} aria-hidden /> : <XCircle size={20} className="text-[var(--destructive)]" aria-hidden />}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="animate-fade-in flex flex-col gap-3 w-full max-w-4xl mx-auto">
-                        {sentChallenges.length === 0 && <p className="text-center text-[var(--muted-foreground)]">{t.noSentChallenges}</p>}
-                        {sentChallenges.map(challenge => (
-                            <div
-                                key={challenge.id}
-                                className="relative w-full max-w-4xl mx-auto rounded-xl p-3 flex gap-3 items-center overflow-hidden border border-white/5"
-                                style={{ background: 'var(--card)' }}
-                            >
-                                <img
-                                    src={challenge.movie.image}
-                                    alt={challenge.movie.title}
-                                    onClick={() => handleViewDetails(challenge.movie)}
-                                    className="w-12 h-16 sm:w-14 sm:h-20 object-cover rounded shrink-0 bg-[var(--border)] cursor-pointer hover:opacity-80 transition-opacity"
-                                />
-                                <div className="flex flex-col flex-1 min-w-0 justify-center gap-1.5">
-                                    <h4 className="text-sm sm:text-base font-bold text-white truncate leading-tight pr-1">{challenge.movie.title}</h4>
-                                    <p className="text-xs text-[var(--muted-foreground)] truncate">
-                                        Para: <span className="text-[var(--foreground)] font-bold">{challenge.receiverName || challenge.sender}</span>
-                                        <span className="hidden min-[350px]:inline"> · {new Date(challenge.timestamp).toLocaleDateString()}</span>
-                                    </p>
-                                </div>
-                                <div className="shrink-0 text-[var(--secondary)] ml-1">
-                                    {challenge.status === 'pending' ? <Clock size={20} className="text-[var(--muted-foreground)]" aria-hidden /> :
-                                        challenge.status === 'accepted' ? <CheckCircle size={20} aria-hidden /> : <XCircle size={20} className="text-[var(--destructive)]" aria-hidden />}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
+                            </ul>
+                        )
+                )}
+                {tab === 'sent' && (
+                    sentChallenges.length === 0
+                        ? <EmptyState icon={Swords} title={t.noSentChallenges} />
+                        : (
+                            <ul className="flex flex-col gap-3">
+                                {sentChallenges.map(c => (
+                                    <li key={c.id}>
+                                        <ChallengeRow challenge={c} direction="sent" onOpenDetails={() => setDetailsMovie(c.movie)} />
+                                    </li>
+                                ))}
+                            </ul>
+                        )
                 )}
             </div>
-            
-            {/* Movie Details Modal */}
-            {showDetailsModal && selectedChallengeMovie && (
-                <MovieDetailsModal
-                    movie={selectedChallengeMovie}
-                    onClose={() => {
-                        setShowDetailsModal(false);
-                        setSelectedChallengeMovie(null);
-                    }}
-                />
-            )}
+
+            {detailsMovie && <MovieDetailsModal movie={detailsMovie} onClose={() => setDetailsMovie(null)} />}
         </div>
     );
 }

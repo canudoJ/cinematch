@@ -1,295 +1,132 @@
 'use client';
+
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useDecks } from '@/context/DeckContext';
-import { useLanguage } from '@/context/LanguageContext';
-import { discoverContent, TMDBItem } from '@/services/tmdb';
-import { Movie } from '@/lib/data';
-import BackButton from '@/components/ui/BackButton';
-import { useToast } from '@/components/ui/Toast';
 import {
     Frown, Laugh, AlertTriangle, Zap, Film, Palette, Dices, Brain, Heart, Search,
-    Timer, Tv, Wine, Building2, Trash2, Sparkles, type LucideIcon
+    Timer, Tv, Wine, Building2, Popcorn, Sparkles, type LucideIcon,
 } from 'lucide-react';
+import { useDecks } from '@/context/DeckContext';
+import { useLanguage } from '@/context/LanguageContext';
+import { useToast } from '@/components/ui/Toast';
+import { discover } from '@/services/tmdb';
+import { tmdbItemToMovie } from '@/lib/movies';
+import { getUserRegion, toTmdbLang } from '@/lib/region';
+import { answersToQuery, buildQuizDeck, type AffinityAnswers, type AffinityQuestionId } from '@/lib/affinity';
+import { GameHeader } from '@/components/layout/GameHeader';
+import type { Translations } from '@/i18n/es';
 
-// --- TYPES ---
-type QuestionId = 'vibe' | 'style' | 'brain' | 'duration' | 'quality';
+/** Títulos de la baraja que genera el test */
+const QUIZ_DECK_SIZE = 15;
 
-const AFFINITY_ICONS: Record<string, LucideIcon> = {
-    Frown, Laugh, AlertTriangle, Zap, Film, Palette, Dices, Brain, Heart, Search,
-    Timer, Tv, Wine, Building2, Trash2
-};
-
-interface QuizOption {
-    label: string;
-    iconName: keyof typeof AFFINITY_ICONS;
-    value: string;
-    color: string;
+interface Question<K extends AffinityQuestionId = AffinityQuestionId> {
+    id: K;
+    options: { value: AffinityAnswers[K]; icon: LucideIcon }[];
 }
 
-interface Question {
-    id: QuestionId;
-    title: string;
-    options: QuizOption[];
-}
-
-// --- NEW QUESTIONS CONFIG (UI) ---
 const QUESTIONS: Question[] = [
-    {
-        id: 'vibe',
-        title: "¿Mood de hoy?",
-        options: [
-            { label: 'cry', iconName: 'Frown', value: 'cry', color: '#6c5ce7' },
-            { label: 'laugh', iconName: 'Laugh', value: 'laugh', color: '#fab1a0' },
-            { label: 'tension', iconName: 'AlertTriangle', value: 'tension', color: '#0984e3' },
-            { label: 'adrenaline', iconName: 'Zap', value: 'adrenaline', color: '#ff7675' }
-        ]
-    },
-    {
-        id: 'style',
-        title: "¿Mundo visual?",
-        options: [
-            { label: 'Carne y Hueso', iconName: 'Film', value: 'real', color: '#636e72' },
-            { label: 'Píxeles y Tinta', iconName: 'Palette', value: 'animation', color: '#00b894' },
-            { label: 'Sorpréndeme', iconName: 'Dices', value: 'mixed', color: '#a29bfe' }
-        ]
-    },
-    {
-        id: 'brain',
-        title: "¿Nivel de atención?",
-        options: [
-            { label: 'Modo Zombi', iconName: 'Brain', value: 'zombie', color: '#fd79a8' },
-            { label: 'Tranqui', iconName: 'Heart', value: 'casual', color: '#74b9ff' },
-            { label: 'Sherlock', iconName: 'Search', value: 'sherlock', color: '#6c5ce7' }
-        ]
-    },
-    {
-        id: 'duration',
-        title: "¿Cuánto tiempo tienes?",
-        options: [
-            { label: 'Cortita (<90m)', iconName: 'Timer', value: 'short', color: '#00cec9' },
-            { label: 'Peli Estándar', iconName: 'Film', value: 'movie', color: '#55efc4' },
-            { label: 'Maratón Serie', iconName: 'Tv', value: 'binge', color: '#fdcb6e' }
-        ]
-    },
-    {
-        id: 'quality',
-        title: "¿Tu paladar hoy?",
-        options: [
-            { label: 'Gourmet / Culto', iconName: 'Wine', value: 'gourmet', color: '#d63031' },
-            { label: 'Blockbuster', iconName: 'Building2', value: 'blockbuster', color: '#ffeaa7' },
-            { label: 'Placer Culposo', iconName: 'Trash2', value: 'trash', color: '#b2bec3' }
-        ]
-    }
+    { id: 'vibe', options: [{ value: 'cry', icon: Frown }, { value: 'laugh', icon: Laugh }, { value: 'tension', icon: AlertTriangle }, { value: 'adrenaline', icon: Zap }] },
+    { id: 'style', options: [{ value: 'real', icon: Film }, { value: 'animation', icon: Palette }, { value: 'mixed', icon: Dices }] },
+    { id: 'brain', options: [{ value: 'zombie', icon: Brain }, { value: 'casual', icon: Heart }, { value: 'sherlock', icon: Search }] },
+    { id: 'duration', options: [{ value: 'short', icon: Timer }, { value: 'movie', icon: Film }, { value: 'binge', icon: Tv }] },
+    { id: 'quality', options: [{ value: 'gourmet', icon: Wine }, { value: 'blockbuster', icon: Building2 }, { value: 'trash', icon: Popcorn }] },
 ];
+
+/** Cada opción toma un color de marca, en orden */
+const OPTION_COLORS = ['var(--primary)', 'var(--secondary)', 'var(--accent-mid)', 'var(--warning)'];
+
+type TextKey = keyof Translations;
+const questionText = (t: Translations, id: AffinityQuestionId) => t[`quiz_${id}` as TextKey] as string;
+const optionText = (t: Translations, id: AffinityQuestionId, value: string) => t[`quiz_${id}_${value}` as TextKey] as string;
 
 export default function AffinityPage() {
     const router = useRouter();
-    const { saveDeck, setActiveDeck } = useDecks();
+    const { setActiveDeck } = useDecks();
     const { showToast } = useToast();
-    const { language } = useLanguage();
+    const { t, language } = useLanguage();
     const [step, setStep] = useState(0);
-    const [answers, setAnswers] = useState<Record<string, string>>({});
+    const [answers, setAnswers] = useState<Partial<AffinityAnswers>>({});
     const [loading, setLoading] = useState(false);
 
-    const currentQuestion = QUESTIONS[step];
+    const question = QUESTIONS[step];
 
-    const handleAnswer = async (value: string) => {
-        const newAnswers = { ...answers, [currentQuestion.id]: value };
-        setAnswers(newAnswers);
-
-        if (step < QUESTIONS.length - 1) {
-            setStep(prev => prev + 1);
-        } else {
-            await generateDeck(newAnswers);
-        }
-    };
-
-    const generateDeck = async (finalAnswers: Record<string, string>) => {
+    const generateDeck = async (final: AffinityAnswers) => {
         setLoading(true);
+        const { type, ...params } = answersToQuery(final);
+        const items = await discover(type, { ...params, language: toTmdbLang(language), watch_region: getUserRegion() });
+        const movies = items.filter(i => i.poster_path).slice(0, QUIZ_DECK_SIZE).map(i => tmdbItemToMovie(i, type, language));
 
-        const mood = finalAnswers['vibe'];
-        const style = finalAnswers['style'];
-        const brain = finalAnswers['brain'];
-        const duration = finalAnswers['duration'];
-        const quality = finalAnswers['quality'];
-
-        // --- MAPPING LOGIC ---
-
-        let type: 'movie' | 'tv' = 'movie';
-        if (duration === 'binge') type = 'tv';
-
-        let withGenres: string[] = [];
-        let withoutGenres: string[] = [];
-
-        // 1. Mood Logic
-        if (mood === 'cry') withGenres.push('18', '10752'); // Drama, War
-        if (mood === 'laugh') withGenres.push('35'); // Comedy
-        if (mood === 'tension') withGenres.push('53', '9648'); // Thriller, Mystery
-        if (mood === 'adrenaline') withGenres.push('28', '12'); // Action, Adventure
-
-        // 2. Style Logic
-        if (style === 'animation') withGenres.push('16');
-        if (style === 'real') withoutGenres.push('16'); // Exclude animation
-
-        // 3. Brain Logic
-        if (brain === 'zombie') {
-            withGenres.push('28', '35', '10751'); // Action, Comedy, Family
-            // Soft exclude heavy stuff? Maybe not strict exclude, but prioritize fun
-        }
-        if (brain === 'sherlock') {
-            withGenres.push('9648', '53', '80', '878'); // Mystery, Thriller, Crime, Sci-Fi
-        }
-
-        // 4. Duration Logic
-        let runtimeLte = undefined; // For movie
-        let runtimeGte = undefined; // For movie
-
-        if (duration === 'short') runtimeLte = '90';
-        if (duration === 'movie') { runtimeLte = '150'; runtimeGte = '80'; }
-        // For TV (binge), we don't strictly filter runtime per episode usually, but could filter by genre or total seasons?
-        // TMDB discover/tv doesn't support 'runtime' well. We will ignore runtime for TV for now.
-
-        // 5. Quality Logic
-        let voteAverageGte = undefined;
-        let voteAverageLte = undefined;
-        let voteCountGte = '50'; // Base filter to avoid junk
-        let sortBy = 'popularity.desc';
-
-        if (quality === 'gourmet') {
-            voteAverageGte = '7.0';
-            voteCountGte = '200';
-            // Boost Indie? TMDB doesn't have 'indie' genre. High rating is best proxy.
-        }
-        if (quality === 'blockbuster') {
-            sortBy = 'popularity.desc';
-            // Budget filter not available in discover easily, relying on popularity
-        }
-        if (quality === 'trash') {
-            voteAverageLte = '6.0';
-            sortBy = 'vote_count.desc'; // Popular trash? Or random?
-        }
-
-        // --- EXECUTE API ---
-        const tmdbLang = language === 'es' ? 'es-ES' : 'en-US';
-        const results = await discoverContent(type, {
-            with_genres: withGenres.join(','),
-            without_genres: withoutGenres.join(','),
-            with_runtime_lte: type === 'movie' ? runtimeLte : undefined,
-            with_runtime_gte: type === 'movie' ? runtimeGte : undefined,
-            vote_average_gte: voteAverageGte,
-            vote_average_lte: voteAverageLte,
-            vote_count_gte: voteCountGte,
-            sort_by: sortBy,
-            lang: tmdbLang
-        });
-
-        if (results && results.length > 0) {
-            const movies: Movie[] = results.slice(0, 15).map(item => ({
-                id: item.id.toString(),
-                type: type,
-                title: type === 'movie' ? item.title! : item.name!,
-                title_es: type === 'movie' ? item.title : item.name,
-                year: new Date(item.release_date || item.first_air_date || Date.now()).getFullYear(),
-                rating: item.vote_average,
-                image: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : '',
-                synopsis: item.overview,
-                synopsis_es: language === 'es' ? item.overview : '',
-                genres: []
-            }));
-
-            const today = new Date().toLocaleDateString();
-            // TEMPORARY DECK: Do not save to context/localStorage
-            const tempId = `temp-${Date.now()}`;
-
-            const newDeck = {
-                id: tempId,
-                creatorId: 'me',
-                creatorName: 'Tú',
-                title: `Match ${quality} ${today}`,
-                description: `Mood: ${mood} • ${type === 'movie' ? 'Peli' : 'Serie'} • ${style}`,
-                movies: movies,
-                tags: ['Quiz', mood],
-                likes: 0,
-                isPublic: false,
-                isOfficial: false,
-                privacy: 'private' as const
-            };
-
-            // NO GUARDAR: Este es un deck temporal del modo de juego, no debe guardarse en la base de datos
-            // Solo establecerlo como activeDeck para visualización temporal
-            setActiveDeck(newDeck);
-            router.push('/');
-
-        } else {
-            showToast("No se encontraron pelis con esos filtros tan específicos :( Intenta relajar tus estándares.", 'info');
+        if (movies.length === 0) {
+            showToast(t.quizNoResults, 'info');
             setLoading(false);
             setStep(0);
+            setAnswers({});
+            return;
         }
+
+        const mood = optionText(t, 'vibe', final.vibe);
+        setActiveDeck(buildQuizDeck(movies, {
+            title: t.quizDeckTitle(mood),
+            description: [mood, optionText(t, 'style', final.style), type === 'movie' ? t.movies : t.tvShows].join(' · '),
+            creator: t.youLabel,
+            tag: t.quizTag,
+        }));
+        router.push('/');
+    };
+
+    const handleAnswer = (value: string) => {
+        const next = { ...answers, [question.id]: value };
+        setAnswers(next);
+        if (step < QUESTIONS.length - 1) setStep(step + 1);
+        else void generateDeck(next as AffinityAnswers);
     };
 
     if (loading) {
         return (
-            <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'black', color: 'white' }}>
-                <Sparkles size={64} className="animate-spin-slow text-[var(--secondary)] mx-auto mb-5" aria-hidden />
-                <h2>Cocinando tu cartelera...</h2>
+            <div className="flex flex-1 flex-col items-center justify-center gap-5 bg-[var(--background)]" role="status">
+                <Sparkles size={64} className="animate-spin-slow text-[var(--secondary)]" aria-hidden />
+                <h2 className="title-section">{t.quizCooking}</h2>
             </div>
         );
     }
 
     return (
-        <div style={{
-            height: '100vh',
-            background: 'var(--background)',
-            padding: '20px',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center'
-        }}>
-            {/* BACK BUTTON */}
-            <BackButton className="absolute top-5 left-5" />
+        <div className="flex flex-1 flex-col bg-[var(--background)]">
+            <GameHeader mode="iceBreaker" title={t.iceBreakerTitle} />
 
-            {/* PROGRESS (Shifted down) */}
-            <div style={{ position: 'absolute', top: 80, left: 20, right: 20, display: 'flex', gap: '5px' }}>
-                {QUESTIONS.map((_, i) => (
-                    <div key={i} style={{
-                        flex: 1,
-                        height: '6px',
-                        borderRadius: '3px',
-                        background: i <= step ? 'var(--secondary)' : 'var(--card)',
-                        transition: 'background 0.3s'
-                    }} />
+            <div
+                className="mx-auto flex w-full max-w-[500px] gap-1.5 px-5"
+                role="progressbar"
+                aria-valuemin={1}
+                aria-valuemax={QUESTIONS.length}
+                aria-valuenow={step + 1}
+                aria-label={t.quizProgress(step + 1, QUESTIONS.length)}
+            >
+                {QUESTIONS.map((q, i) => (
+                    <div key={q.id} className={`h-1.5 flex-1 rounded-full transition-colors ${i <= step ? 'bg-[var(--primary)]' : 'bg-[var(--border-strong)]'}`} />
                 ))}
             </div>
 
-            <div className="animate-fade-in" key={step} style={{ width: '100%', maxWidth: '500px', textAlign: 'center' }}>
-                <h1 style={{ marginBottom: '40px', fontSize: '2rem' }}>{currentQuestion.title}</h1>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '15px' }}>
-                    {currentQuestion.options.map((opt, i) => (
-                        <button
-                            key={i}
-                            onClick={() => handleAnswer(opt.value)}
-                            style={{
-                                background: 'var(--card)',
-                                border: `2px solid ${opt.color}`,
-                                borderRadius: '20px',
-                                padding: '20px 10px',
-                                cursor: 'pointer',
-                                transition: 'transform 0.2s',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: 'center',
-                                gap: '10px'
-                            }}
-                            onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
-                            onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-                        >
-                            {AFFINITY_ICONS[opt.iconName] && React.createElement(AFFINITY_ICONS[opt.iconName], { size: 48, style: { flexShrink: 0 }, 'aria-hidden': true })}
-                            <span style={{ fontWeight: 'bold', fontSize: '1rem', color: 'white' }}>{opt.label}</span>
-                        </button>
-                    ))}
+            <div className="flex flex-1 flex-col items-center justify-center p-5">
+                <div key={step} className="w-full max-w-[500px] text-center animate-fade-in">
+                    <h2 className="title-page mb-10">{questionText(t, question.id)}</h2>
+                    <div className="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-4">
+                        {question.options.map((option, i) => {
+                            const Icon = option.icon;
+                            return (
+                                <button
+                                    key={option.value}
+                                    type="button"
+                                    onClick={() => handleAnswer(option.value)}
+                                    className="flex flex-col items-center gap-2.5 rounded-[20px] border-2 bg-[var(--card)] px-2.5 py-5 transition-transform hover:scale-105"
+                                    style={{ borderColor: OPTION_COLORS[i % OPTION_COLORS.length] }}
+                                >
+                                    <Icon size={48} className="shrink-0" style={{ color: OPTION_COLORS[i % OPTION_COLORS.length] }} aria-hidden />
+                                    <span className="font-bold">{optionText(t, question.id, option.value)}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
                 </div>
             </div>
         </div>

@@ -1,9 +1,22 @@
 import type { LucideIcon } from 'lucide-react';
 import { Sun, Laugh, Frown, Zap, Brain, Heart, Users, Trophy, Ghost, Rocket, Sparkles, Film, Star, Tag } from 'lucide-react';
 
-export const TAG_WARM_BG = 'rgba(255, 110, 90, 0.22)';
+// ---------------------------------------------------------------------------
+// Tags de barajas
+// ---------------------------------------------------------------------------
 
-export const TAG_TO_ICON: Record<string, LucideIcon> = {
+export const MAX_DECK_TAGS = 5;
+
+/** Tags sugeridos agrupados por categoría (la clave se traduce en la UI) */
+export const SUGGESTED_TAGS = {
+    moods: ['Chill', 'Risas', 'Llorar', 'Tensión', 'Mind-bending'],
+    occasions: ['Cita', 'Amigos', 'Domingo', 'Maratón'],
+    genres: ['Terror', 'Sci-Fi', 'Fantasía', 'Anime', 'Clásicos'],
+} as const;
+
+export type TagCategory = keyof typeof SUGGESTED_TAGS;
+
+const TAG_TO_ICON: Record<string, LucideIcon> = {
     Chill: Sun,
     Risas: Laugh,
     Llorar: Frown,
@@ -17,46 +30,34 @@ export const TAG_TO_ICON: Record<string, LucideIcon> = {
     'Sci-Fi': Rocket,
     Fantasía: Sparkles,
     Anime: Film,
-    Clásicos: Star
+    Clásicos: Star,
 };
 
-export const getTagIcon = (tag: string): LucideIcon => {
-    const normalizedTag = tag.replace(/[\p{Emoji}\p{Symbol}]/gu, '').trim();
-    return TAG_TO_ICON[normalizedTag] ?? TAG_TO_ICON[tag] ?? Tag;
-};
+/**
+ * Quita emojis y símbolos de un tag guardado ("🔥 Clásicos" → "Clásicos").
+ * Usa Extended_Pictographic: \p{Emoji} también casaría con dígitos ("Top 10" → "Top").
+ */
+export const getTagLabel = (tag: string): string =>
+    tag.replace(/[\p{Extended_Pictographic}️‍]/gu, '').replace(/\s+/g, ' ').trim();
 
-export const getTagLabel = (tag: string): string => {
-    return tag.replace(/[\p{Emoji}\p{Symbol}]/gu, '').trim();
-};
+export const getTagIcon = (tag: string): LucideIcon => TAG_TO_ICON[getTagLabel(tag)] ?? Tag;
 
-export const PROVIDERS = [
-    { id: '8', name: 'Netflix', color: '#E50914', textColor: 'white' },
-    { id: '119', name: 'Prime Video', color: '#00A8E1', textColor: 'white' },
-    { id: '337', name: 'Disney+', color: '#113CCF', textColor: 'white' },
-    { id: '384', name: 'HBO Max', color: '#9900FF', textColor: 'white' },
-    { id: '283', name: 'Crunchyroll', color: '#F47521', textColor: 'black' }
-];
+/**
+ * Normaliza lo que escribe el usuario: si coincide (sin distinguir mayúsculas)
+ * con un tag sugerido usa su forma canónica; si no, el texto limpio.
+ * Devuelve '' si no queda nada que añadir.
+ */
+export function normalizeTag(input: string): string {
+    const label = getTagLabel(input);
+    if (!label) return '';
+    const suggested = Object.values(SUGGESTED_TAGS).flat() as string[];
+    return suggested.find(s => s.toLowerCase() === label.toLowerCase()) ?? label;
+}
 
-export const HBO_PROVIDER_IDS = ['384', '1899']; // IDs para Max y canales legacy
+// ---------------------------------------------------------------------------
+// Géneros de TMDB (películas)
+// ---------------------------------------------------------------------------
 
-// Helper map for fallback names (ID -> Name)
-export const PROVIDER_NAMES: Record<string, string> = PROVIDERS.reduce((acc, p) => {
-    acc[p.id] = p.name;
-    return acc;
-}, {} as Record<string, string>);
-
-// Manual additions for complex mappings (like HBO legacy)
-PROVIDER_NAMES['118'] = 'HBO Max';
-PROVIDER_NAMES['1796'] = 'Max Amazon Channel';
-
-export const PROVIDER_MAPPING = {
-    'HBO Max': [384, 1899, 118], // Max, Max Amazon, HBO Max Legacy
-    'Netflix': [8],
-    'Amazon Prime Video': [119],
-    'Disney+': [337]
-};
-
-// Géneros de TMDB (IDs principales)
 export const TMDB_GENRES = [
     { id: 28, name: 'Acción', name_en: 'Action' },
     { id: 12, name: 'Aventura', name_en: 'Adventure' },
@@ -76,5 +77,5 @@ export const TMDB_GENRES = [
     { id: 10770, name: 'Película de TV', name_en: 'TV Movie' },
     { id: 53, name: 'Suspense', name_en: 'Thriller' },
     { id: 10752, name: 'Guerra', name_en: 'War' },
-    { id: 37, name: 'Western', name_en: 'Western' }
+    { id: 37, name: 'Western', name_en: 'Western' },
 ];

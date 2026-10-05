@@ -2,28 +2,23 @@
 
 import { usePathname } from 'next/navigation';
 import { BottomNav, NAV_HEIGHT } from './BottomNav';
-
-export const BOTTOM_NAV_HEIGHT = NAV_HEIGHT;
-
-const HIDE_NAV_PATHS = ['/auth', '/error'];
-
-function shouldShowBottomNav(pathname: string) {
-  return !HIDE_NAV_PATHS.some((p) => pathname.startsWith(p));
-}
+import RouletteInviteModal from '@/components/RouletteInviteModal';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
-  const showNav = shouldShowBottomNav(pathname ?? '');
+    const pathname = usePathname() ?? '';
+    // Las pantallas de acceso no muestran la navegación
+    const showNav = !pathname.startsWith('/auth');
 
-  return (
-    <>
-      <div
-        className="h-full w-full flex flex-col min-h-0 overflow-hidden"
-        style={showNav ? { paddingBottom: BOTTOM_NAV_HEIGHT } : undefined}
-      >
-        {children}
-      </div>
-      {showNav && <BottomNav />}
-    </>
-  );
+    return (
+        <>
+            <div
+                className="flex h-full min-h-0 w-full flex-col overflow-hidden"
+                style={showNav ? { paddingBottom: NAV_HEIGHT } : undefined}
+            >
+                {children}
+            </div>
+            {showNav && <BottomNav />}
+            <RouletteInviteModal />
+        </>
+    );
 }

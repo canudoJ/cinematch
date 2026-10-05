@@ -3,304 +3,222 @@
 @tailwind utilities;
 
 /* ============================================
-   Optimizaciones para móvil (Touch)
-   ============================================ */
-
-/* Mejorar respuesta táctil en elementos interactivos */
-button,
-a,
-[role="button"],
-[onclick],
-[tabindex="0"] {
-  touch-action: manipulation; /* Elimina delay de 300ms en móvil */
-  -webkit-touch-callout: none; /* Evita menú contextual al mantener presionado */
-}
-
-/* Áreas táctiles más grandes en móvil */
-@media (max-width: 768px) {
-  button,
-  a,
-  [role="button"] {
-    min-height: 44px; /* Tamaño mínimo recomendado para toques */
-    min-width: 44px;
-  }
-}
-
-/* ============================================
-   Neon Cinema – Design tokens (dark by default)
+   Neon Cinema – design tokens (oscuro por defecto)
+   Regla: los componentes usan siempre var(--token), nunca colores literales.
    ============================================ */
 :root {
-  /* Core (requeridos) */
+  /* Base */
   --background: #0a0a0a;
   --foreground: #fafafa;
-  --primary: #ff0055;
-  --primary-foreground: #ffffff;
-  --secondary: #00e5ff;
   --card: #121212;
   --card-foreground: #fafafa;
   --surface: #121212;
+  /* Superficie elevada (inputs, chips, filas dentro de una tarjeta) */
+  --surface-raised: #1c1c1c;
   --surface-border: rgba(255, 255, 255, 0.1);
-  --destructive: #ff4444;
   --border: #262626;
+  /* Borde de controles sin seleccionar (casillas, chips): visible sobre --card */
+  --border-strong: rgba(255, 255, 255, 0.24);
   --input: #262626;
-  --ring: #ff0055;
-
-  /* Neon Cinema extras (compatibilidad y semántica) */
-  --secondary-foreground: #0a0a0a;
   --muted: #262626;
   --muted-foreground: #a3a3a3;
-  --accent: #00e5ff;
+
+  /* Marca */
+  --primary: #ff0055;
+  --primary-foreground: #ffffff;
+  --secondary: #00e5ff;
+  --secondary-foreground: #0a0a0a;
+  --accent: var(--secondary);
+  --accent-mid: #c84cff;
+  --accent-mid-foreground: #ffffff;
+  --destructive: #ff4444;
+  --warning: #ffb020;
+  --ring: #ff0055;
+
+  /* Derivados (transparencias de los colores de marca) */
+  --primary-soft: color-mix(in srgb, var(--primary) 14%, transparent);
+  --primary-glow: color-mix(in srgb, var(--primary) 35%, transparent);
+  --secondary-soft: color-mix(in srgb, var(--secondary) 12%, transparent);
+  --secondary-glow: color-mix(in srgb, var(--secondary) 35%, transparent);
+  --accent-mid-soft: color-mix(in srgb, var(--accent-mid) 16%, transparent);
+  --accent-mid-glow: color-mix(in srgb, var(--accent-mid) 45%, transparent);
+  --destructive-soft: color-mix(in srgb, var(--destructive) 14%, transparent);
+  --warning-soft: color-mix(in srgb, var(--warning) 16%, transparent);
+  /* Texto sobre pósters e imágenes oscurecidas: blanco en ambos temas */
+  --on-media: #ffffff;
+  /* Fondo bajo un póster mientras carga (igual en ambos temas: el texto encima es blanco) */
+  --media-bg: #161616;
+  /* Acentos sobre pósters (géneros): vivos y legibles sobre fondo oscuro, iguales en ambos temas */
+  --media-pink: #ff4d8d;
+  --media-cyan: #3fe0ff;
+  --media-violet: #c084fc;
+  --media-amber: #ffc04d;
+  --media-green: #4ade80;
+  --media-orange: #ff8a4c;
+  --overlay: rgba(0, 0, 0, 0.82);
+  /* Degradado para leer texto sobre pósters */
+  --poster-fade: linear-gradient(to top, rgba(0, 0, 0, 0.95) 0%, rgba(0, 0, 0, 0.55) 45%, transparent 100%);
+
+  /* Forma y profundidad */
   --radius: 0.75rem;
   --radius-sm: 0.5rem;
   --radius-lg: 1rem;
-  --radius-xl: 1.25rem;
-  --shadow-neon-pink: 0 0 20px rgba(255, 0, 85, 0.35);
-  --shadow-neon-cyan: 0 0 20px rgba(0, 229, 255, 0.25);
-  /* Compatibilidad: alias para componentes existentes (migrar a nuevas vars) */
-  --bg-dark: var(--card);
-  --bg-darker: var(--background);
-  --bg-card: var(--card);
-  --border-color: var(--border);
-  --text-secondary: var(--muted-foreground);
-  --text-tertiary: #737373;
-  --accent-green: var(--secondary);
-  --accent-green-alt: #00e5ff;
-  --accent-red: var(--destructive);
-  --accent-red-alt: #ff4757;
-  --overlay-dark: rgba(0, 0, 0, 0.7);
-  --border-width: 1px;
-  --accent-mid: #c84cff;
-  /* Fondo texturizado modo oscuro (líneas diagonales discretas) */
-  --background-texture: repeating-linear-gradient(
-    135deg,
-    #495057 0px,
-    #495057 1px,
-    transparent 1px,
-    transparent 32px
-  );
+  --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --shadow-neon-pink: 0 0 20px var(--primary-glow);
+  --shadow-neon-cyan: 0 0 20px color-mix(in srgb, var(--secondary) 25%, transparent);
 
-  /* Scrollbars Neon Cinema */
+  /* Capas (z-index) */
+  --z-dropdown: 200;
+  --z-header: 500;
+  --z-modal: 1000;
+  --z-modal-nested: 1100;
+  --z-overlay: 2000;
+  --z-dialog: 2100;
+  --z-toast: 9999;
+
+  /* Scrollbars */
   --scrollbar-track: #171717;
   --scrollbar-thumb: #404040;
-  --scrollbar-thumb-hover: rgba(0, 229, 255, 0.5);
-  --scrollbar-thumb-active: rgba(255, 0, 85, 0.4);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--secondary) 50%, transparent);
+  --scrollbar-thumb-active: color-mix(in srgb, var(--primary) 40%, transparent);
+
+  color-scheme: dark;
 }
 
-/* Modo claro (opcional; la base es dark) – .light y body.theme-light para ThemeContext */
-.light,
-body.theme-light {
+/* Modo claro: ThemeContext (y el script de <head>) añade .theme-light a <html> */
+html.theme-light {
   --background: #f0f2f5;
   --foreground: #0a0a0a;
-  --primary: #e0004a;
-  --primary-foreground: #ffffff;
-  --secondary: #0090aa;
   --card: #ffffff;
   --card-foreground: #0a0a0a;
   --surface: #f8f9fa;
+  --surface-raised: #eef1f4;
   --surface-border: rgba(0, 0, 0, 0.12);
-  --destructive: #cc2020;
   --border: #b0b8c4;
+  --border-strong: rgba(0, 0, 0, 0.28);
   --input: #dce1e8;
-  --ring: #e0004a;
   --muted: #dce1e8;
   --muted-foreground: #3a3a3a;
-  --bg-dark: var(--card);
-  --bg-darker: var(--background);
-  --bg-card: var(--card);
-  --border-color: var(--border);
-  --text-secondary: var(--muted-foreground);
-  --text-tertiary: #555555;
-  --overlay-dark: rgba(0, 0, 0, 0.5);
-  --shadow-neon-pink: 0 0 12px rgba(224, 0, 74, 0.2);
-  --shadow-neon-cyan: 0 0 12px rgba(0, 144, 170, 0.2);
-  /* Fondo texturizado modo día (líneas diagonales discretas) */
-  --background-texture: repeating-linear-gradient(
-    135deg,
-    #CED4DA 0px,
-    #CED4DA 1px,
-    transparent 1px,
-    transparent 32px
-  );
+  --primary: #e0004a;
+  --secondary: #0090aa;
+  --secondary-foreground: #ffffff;
+  --accent-mid: #9b2fd6;
+  --destructive: #cc2020;
+  --warning: #b57400;
+  --ring: #e0004a;
+  --overlay: rgba(10, 10, 20, 0.5);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-neon-pink: 0 0 12px color-mix(in srgb, var(--primary) 20%, transparent);
+  --shadow-neon-cyan: 0 0 12px color-mix(in srgb, var(--secondary) 20%, transparent);
   --scrollbar-track: #dce1e8;
   --scrollbar-thumb: #9aa3ad;
-  --scrollbar-thumb-hover: rgba(0, 144, 170, 0.5);
-  --scrollbar-thumb-active: rgba(224, 0, 74, 0.35);
-}
 
-/* Correcciones de contraste modo día — clases Tailwind con valores hardcodeados */
-body.theme-light .modal-surface,
-body.theme-light .section-card,
-body.theme-light .surface-card {
-  border-color: var(--border);
-}
-
-/* Textos blancos hardcodeados que no se ven en fondo claro */
-body.theme-light .text-white {
-  color: var(--foreground) !important;
-}
-
-/* Fondos oscuros hardcodeados */
-body.theme-light .bg-black\/50,
-body.theme-light .bg-\[var\(--bg-dark\)\]\/80,
-body.theme-light .bg-\[var\(--bg-dark\)\]\/50,
-body.theme-light .bg-\[var\(--bg-dark\)\]\/30 {
-  background-color: rgba(0,0,0,0.04) !important;
-}
-
-/* Bordes white/10 de Tailwind invisibles en modo claro */
-body.theme-light .border-white\/10,
-body.theme-light .border-gray-800,
-body.theme-light .border-gray-700 {
-  border-color: var(--border) !important;
-}
-
-/* Textos grises de Tailwind — mejorar contraste */
-body.theme-light .text-gray-400,
-body.theme-light .text-gray-500,
-body.theme-light .text-\[\#888\] {
-  color: #444 !important;
-}
-body.theme-light .text-gray-600 {
-  color: #333 !important;
+  color-scheme: light;
 }
 
 /* ============================================
-   Scrollbars globales – Neon Cinema (CRÍTICO)
-   Elimina el scrollbar blanco nativo del navegador
+   Base
    ============================================ */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
-  /* Eliminar highlight azul al tocar en móvil */
-  -webkit-tap-highlight-color: transparent;
-  tap-highlight-color: transparent;
-}
-
-*::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-*::-webkit-scrollbar-track {
-  background: var(--scrollbar-track);
-  border-radius: 0;
-}
-
-*::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: 9999px;
-  border: 2px solid var(--scrollbar-track);
-}
-
-*::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
-}
-
-*::-webkit-scrollbar-thumb:active {
-  background: var(--scrollbar-thumb-active);
-}
-
-*::-webkit-scrollbar-corner {
-  background: var(--scrollbar-track);
-}
-
 @layer base {
   * {
     @apply border-border box-border;
   }
-  html {
-    @apply antialiased;
-  }
   body {
-    @apply bg-background text-foreground h-screen w-screen flex flex-col overflow-hidden;
+    @apply bg-background text-foreground h-screen w-screen flex flex-col overflow-hidden antialiased;
     font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+    background-size: cover;
+    background-position: center center;
+    background-repeat: no-repeat;
+  }
+  html.theme-dark body {
+    background-color: var(--card);
+    background-image: url('/bg-night-diagonal.svg');
+  }
+  html.theme-light body {
+    background-color: #f3f4f7;
+    background-image: url('/bg-day-diagonal.svg');
   }
   a {
     @apply text-inherit no-underline;
   }
+  /* Sin border-none: el reset de Tailwind ya los deja sin borde y así
+     las clases border-* de cada botón (secundarios, pestañas, casillas) se ven */
   button {
-    @apply cursor-pointer border-none;
+    @apply cursor-pointer;
     font-family: inherit;
   }
-  /* Focus morado en campos de texto (sustituye el amarillo por defecto del navegador) */
+  /* Respuesta táctil inmediata (sin el retraso de 300 ms) */
+  button,
+  a,
+  [role='button'] {
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+  }
   input:focus,
   select:focus,
   textarea:focus {
     outline: none;
     box-shadow: 0 0 0 1px var(--accent-mid);
   }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* Scrollbars de marca (evita el scrollbar blanco nativo) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  -webkit-tap-highlight-color: transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 9999px;
+  border: 2px solid var(--scrollbar-track);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+*::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
 }
 
 /* ============================================
-   Fondos diagonales (wallpapers SVG) – global
-   Se aplican en escritorio y móvil, según tema
+   Componentes
    ============================================ */
-body.theme-light {
-  background-color: #f3f4f7; /* off-white, no blanco puro */
-  background-image: url('/bg-day-diagonal.svg');
-  background-size: cover;
-  background-position: center center;
-  background-repeat: no-repeat;
-}
-
-body.theme-dark {
-  background-color: #121212;
-  background-image: url('/bg-night-diagonal.svg');
-  background-size: cover;
-  background-position: center center;
-  background-repeat: no-repeat;
-}
-
 @layer components {
-  .container {
-    @apply max-w-[600px] mx-auto px-5 w-full flex-1 flex flex-col;
-  }
-
-  /* Capas: fondo #0a0a0a, superficies #121212 + borde flotante */
   .modal-surface {
-    @apply rounded-2xl border border-white/10 max-h-[90vh] flex flex-col;
+    @apply flex max-h-[90vh] flex-col rounded-2xl border p-4 sm:p-6 md:p-[1.875rem];
     background: var(--card);
-    padding: 1.5rem;
-  }
-  @media (min-width: 640px) {
-    .modal-surface {
-      padding: 1.875rem;
-    }
+    border-color: var(--surface-border);
   }
 
   .section-card {
-    @apply rounded-2xl border border-white/10 p-5;
+    @apply rounded-2xl border p-5;
     background: var(--card);
+    border-color: var(--surface-border);
   }
 
-  .surface-card {
-    @apply rounded-2xl border border-white/10;
-    background: var(--surface);
-  }
-
-  .surface-glass {
-    @apply rounded-2xl border border-white/10 backdrop-blur-lg;
-    background: rgba(38, 38, 38, 0.9);
-  }
-
-  .card-neon {
-    @apply rounded-2xl border border-white/10 bg-[var(--card)];
-  }
-  .card-neon-subtle {
-    @apply rounded-2xl border border-white/10;
-  }
-
-  /* Tarjetas de Mi Videoteca (grid) */
+  /* Tarjetas de Mi Videoteca (borde degradado al pasar el ratón o enfocar) */
   .library-card {
     position: relative;
     border-radius: 12px;
     overflow: hidden;
-    background: #121212;
+    background: var(--card);
   }
   .library-card-inner {
     position: relative;
     width: 100%;
-    padding-bottom: 66.66%; /* relación 2:3 */
+    aspect-ratio: 2 / 3;
     border-radius: inherit;
     overflow: hidden;
   }
@@ -308,12 +226,11 @@ body.theme-dark {
     content: '';
     position: absolute;
     inset: 0;
+    z-index: 1;
     padding: 2px;
     border-radius: inherit;
     background: linear-gradient(to bottom, var(--primary), var(--secondary));
-    -webkit-mask:
-      linear-gradient(#000 0 0) content-box,
-      linear-gradient(#000 0 0);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
     -webkit-mask-composite: xor;
     mask-composite: exclude;
     opacity: 0;
@@ -321,77 +238,49 @@ body.theme-dark {
     pointer-events: none;
   }
   .library-card:hover::before,
+  .library-card:focus-visible::before,
   .library-card:focus-within::before {
     opacity: 1;
   }
 
-  .heading-xl {
-    @apply text-[1.8rem] font-extrabold tracking-tight;
+  /* ---------- Jerarquía de texto (usar siempre estas clases) ---------- */
+  /* Título de pantalla: tipografía de cartel */
+  .title-page {
+    @apply font-display text-[1.75rem] font-extrabold leading-tight tracking-tight sm:text-[2.1rem];
   }
-  .heading-lg {
-    @apply text-xl font-bold;
+  /* Título de sección o de modal */
+  .title-section {
+    @apply font-display text-xl font-bold leading-snug tracking-tight sm:text-[1.35rem];
   }
-  @media (min-width: 640px) {
-    .heading-xl {
-      font-size: 2.1rem;
-    }
-    .heading-lg {
-      font-size: 1.4rem;
-    }
+  /* Texto secundario: nunca más pequeño de 13px */
+  .text-caption {
+    @apply text-[13px] leading-snug;
+    color: var(--muted-foreground);
   }
-
-  .btn-primary {
-    @apply w-full text-center font-bold text-lg py-3.5 px-6 rounded-full transition-all duration-200;
-    background: var(--primary);
-    color: var(--primary-foreground);
-    box-shadow: var(--shadow-neon-pink);
-  }
-  .btn-primary:hover {
-    filter: brightness(1.1);
-  }
-  .btn-primary:active {
-    transform: scale(0.98);
-  }
-  @media (max-width: 480px) {
-    .btn-primary {
-      @apply py-3 px-5 text-base;
-    }
+  /* Etiqueta de campo o de grupo, en mayúsculas */
+  .eyebrow {
+    @apply mb-1.5 block text-xs font-bold uppercase tracking-wider;
+    color: var(--muted-foreground);
   }
 
-  /* Ocultar descripción de barajas en móvil cuando falta espacio */
-  @media (max-width: 640px) {
-    .deck-description {
-      display: none !important;
-    }
+  /* Desplegable con el mismo aspecto que <Input> */
+  .field-select {
+    @apply h-11 rounded-xl border px-3 text-[15px] transition-colors;
+    background: var(--surface-raised);
+    color: var(--foreground);
+    border-color: var(--border-strong);
   }
-
-  /* Focus morado solo en el contenedor de DeckTagInput, no en el input */
-  .deck-tag-input-container:focus-within {
+  .field-select:focus-visible {
+    outline: none;
     border-color: var(--accent-mid);
-  }
-  .deck-tag-input-field:focus {
-    box-shadow: none;
-  }
-
-  .btn-secondary {
-    @apply rounded-full font-semibold text-[0.95rem] py-3 px-5 border border-white/10 bg-transparent text-foreground transition-all duration-150;
-  }
-  .btn-secondary:hover {
-    @apply bg-white/10 border-white/20;
-  }
-  .btn-secondary:active {
-    transform: scale(0.97);
   }
 
   .btn-icon {
-    @apply w-14 h-14 rounded-full flex items-center justify-center text-2xl border border-white/10 transition-all duration-200;
+    @apply flex h-14 w-14 items-center justify-center rounded-full border text-2xl transition-all duration-200 hover:scale-110;
     background: var(--card);
     color: var(--foreground);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    touch-action: manipulation; /* Mejor respuesta táctil en móvil */
-  }
-  .btn-icon:hover {
-    transform: scale(1.1);
+    border-color: var(--surface-border);
+    box-shadow: var(--shadow-lg);
   }
   .btn-icon.like {
     color: var(--secondary);
@@ -401,28 +290,24 @@ body.theme-dark {
   .btn-icon.dislike {
     color: var(--destructive);
     border-color: var(--destructive);
-    box-shadow: 0 0 20px rgba(255, 68, 68, 0.45);
+    box-shadow: 0 0 20px color-mix(in srgb, var(--destructive) 45%, transparent);
   }
 
-  /* Espacio seguro para Bottom Nav: evita que botones Like/Dislike se solapen con la barra */
-  .bottom-nav-safe {
-    padding-bottom: env(safe-area-inset-bottom, 0);
+  /* Área táctil mínima de 44 px en móvil para botones de acción
+     (no se aplica a chips o "x" pequeñas, que rompían su diseño) */
+  .tap-target {
+    @apply max-md:min-h-[44px] max-md:min-w-[44px];
   }
 
-  .text-gradient {
-    background: linear-gradient(135deg, var(--primary), var(--secondary));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+  /* Descripción de barajas: se oculta en móvil cuando falta espacio */
+  /* DeckTagInput: el foco se muestra en el contenedor, no en el input */
+  .deck-tag-input-container:focus-within {
+    border-color: var(--accent-mid);
+  }
+  .deck-tag-input-field:focus {
+    box-shadow: none;
   }
 
-  .border-gradient {
-    border: 1px solid transparent;
-    background: linear-gradient(var(--card), var(--card)) padding-box,
-      linear-gradient(135deg, var(--primary), var(--secondary)) border-box;
-  }
-
-  /* Opcional: scrollbar más visible (p. ej. en modales) – usa .custom-scrollbar */
   .custom-scrollbar::-webkit-scrollbar {
     width: 8px;
   }
@@ -441,32 +326,18 @@ body.theme-dark {
 }
 
 @layer utilities {
-  .animate-fade-in {
-    animation: fadeIn 0.5s ease-out forwards;
-  }
-  .animate-pop-in {
-    animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  /* Relleno inferior seguro en móviles con notch / barra de gestos */
+  .safe-area-pb {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 }
 
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes popIn {
-  from {
-    transform: scale(0.9);
-    opacity: 0;
-  }
-  to {
-    transform: scale(1);
-    opacity: 1;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

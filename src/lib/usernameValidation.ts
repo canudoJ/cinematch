@@ -1,34 +1,28 @@
 import { supabase } from './supabase';
 
+export const USERNAME_MIN = 3;
+export const USERNAME_MAX = 20;
+
+/** Letras (con tildes), números, guion bajo y punto */
+const USERNAME_RE = /^[\p{L}\p{N}_.]+$/u;
+
+/** ¿Cumple el formato? (la BD exige al menos 3 caracteres) */
+export function isValidUsername(username: string): boolean {
+    const name = username.trim();
+    return name.length >= USERNAME_MIN && name.length <= USERNAME_MAX && USERNAME_RE.test(name);
+}
+
 /**
- * Verifica si un nombre de usuario está disponible
- * @param username - El nombre de usuario a verificar
- * @param excludeUserId - ID de usuario a excluir de la verificación (útil al editar perfil)
- * @returns true si está disponible, false si ya está en uso
+ * ¿Está libre el nombre? Compara sin distinguir mayúsculas ("Javier" = "javier").
+ * `excludeUserId` permite conservar el propio nombre al editar el perfil.
+ * Ante un error de red devuelve false para no crear duplicados.
  */
 export async function isUsernameAvailable(username: string, excludeUserId?: string): Promise<boolean> {
-    try {
-        const query = supabase
-            .from('profiles')
-            .select('id')
-            .eq('username', username)
-            .maybeSingle();
-
-        const { data, error } = await query;
-
-        if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
-            console.error('Error checking username availability:', error);
-            return false; // En caso de error, asumir que no está disponible para evitar duplicados
-        }
-
-        if (!data) return true; // No existe, está disponible
-
-        // Si se proporciona excludeUserId y coincide, está disponible (es el mismo usuario)
-        if (excludeUserId && data.id === excludeUserId) return true;
-
-        return false; // Existe y no es el mismo usuario
-    } catch (error) {
-        console.error('Error in username validation:', error);
+    const escaped = username.trim().replace(/[\\%_]/g, char => `\\${char}`);
+    const { data, error } = await supabase.from('profiles').select('id').ilike('username', escaped).limit(2);
+    if (error) {
+        console.error('Error checking username availability:', error.message);
         return false;
     }
+    return (data ?? []).every(row => row.id === excludeUserId);
 }

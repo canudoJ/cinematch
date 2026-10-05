@@ -1,28 +1,20 @@
 'use client';
 
 import React from 'react';
+import { X } from 'lucide-react';
+import { useLanguage } from '@/context/LanguageContext';
+import { iconButtonClass } from './iconButton';
 
 interface CloseButtonProps {
     onClose: () => void;
     className?: string;
-    size?: 'sm' | 'md' | 'lg';
 }
 
-export default function CloseButton({ onClose, className = '', size = 'md' }: CloseButtonProps) {
-    const sizeClasses = {
-        sm: 'text-xl',
-        md: 'text-2xl',
-        lg: 'text-3xl'
-    };
-
+export default function CloseButton({ onClose, className = '' }: CloseButtonProps) {
+    const { t } = useLanguage();
     return (
-        <button
-            onClick={onClose}
-            className={`bg-black/50 backdrop-blur-md border border-white/10 text-white hover:bg-white/10 hover:border-purple-500 hover:text-purple-400 transition-all duration-300 ease-out cursor-pointer z-50 rounded-full w-10 h-10 flex items-center justify-center ${sizeClasses[size]} ${className}`}
-            aria-label="Cerrar"
-            style={{ position: 'relative' }} // Cambiar a relative para que el contenedor padre controle la posición
-        >
-            ×
+        <button type="button" onClick={onClose} className={`${iconButtonClass} ${className}`} aria-label={t.close}>
+            <X size={22} aria-hidden />
         </button>
     );
 }

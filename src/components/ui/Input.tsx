@@ -14,15 +14,15 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
         ref={ref}
         type={type}
         className={clsx(
-          'flex h-11 w-full rounded-xl border bg-white/5 px-4 py-3 text-base text-[var(--foreground)]',
+          'flex h-11 w-full rounded-xl border bg-[var(--surface-raised)] px-4 py-3 text-base text-[var(--foreground)]',
           'placeholder:text-[var(--muted-foreground)] placeholder:text-base',
           'transition-all duration-200',
           'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-mid)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)]',
-          'border-white/10 hover:border-white/20',
+          'border-[var(--surface-border)] hover:border-[var(--muted-foreground)]',
           error
             ? 'border-[var(--destructive)] focus-visible:ring-[var(--destructive)]'
             : 'focus-visible:border-[var(--accent-mid)]',
-          'disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-white/[0.02]',
+          'disabled:cursor-not-allowed disabled:opacity-50',
           className
         )}
         aria-invalid={ariaInvalid ?? error}

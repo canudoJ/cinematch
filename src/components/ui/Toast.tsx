@@ -1,10 +1,10 @@
 'use client';
 
-import React, { createContext, useCallback, useContext, useState } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
 
-type ToastType = 'success' | 'error' | 'info';
+export type ToastType = 'success' | 'error' | 'info';
 
-interface Toast {
+interface ToastItem {
     id: number;
     message: string;
     type: ToastType;
@@ -16,49 +16,44 @@ interface ToastContextValue {
 
 const ToastContext = createContext<ToastContextValue>({ showToast: () => {} });
 
-let _id = 0;
+const TOAST_DURATION_MS = 3500;
+
+const ACCENT: Record<ToastType, string> = {
+    success: 'var(--secondary)',
+    error: 'var(--destructive)',
+    info: 'var(--primary)',
+};
+
+let nextId = 0;
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
-    const [toasts, setToasts] = useState<Toast[]>([]);
+    const [toasts, setToasts] = useState<ToastItem[]>([]);
 
     const showToast = useCallback((message: string, type: ToastType = 'info') => {
-        const id = ++_id;
+        const id = ++nextId;
         setToasts(prev => [...prev, { id, message, type }]);
         setTimeout(() => {
             setToasts(prev => prev.filter(t => t.id !== id));
-        }, 3500);
+        }, TOAST_DURATION_MS);
     }, []);
 
-    const colors: Record<ToastType, string> = {
-        success: 'var(--secondary)',
-        error:   'var(--destructive)',
-        info:    'var(--primary)',
-    };
+    const value = useMemo(() => ({ showToast }), [showToast]);
 
     return (
-        <ToastContext.Provider value={{ showToast }}>
+        <ToastContext.Provider value={value}>
             {children}
-            <div style={{
-                position: 'fixed', bottom: '90px', left: '50%', transform: 'translateX(-50%)',
-                zIndex: 9999, display: 'flex', flexDirection: 'column', alignItems: 'center',
-                gap: '10px', pointerEvents: 'none',
-            }}>
+            <div
+                role="status"
+                aria-live="polite"
+                className="pointer-events-none fixed bottom-[90px] left-1/2 z-[var(--z-toast)] flex -translate-x-1/2 flex-col items-center gap-2.5"
+            >
                 {toasts.map(toast => (
                     <div
                         key={toast.id}
-                        className="animate-pop-in"
+                        className="animate-pop-in max-w-[320px] whitespace-pre-line rounded-full bg-[var(--card)] px-[22px] py-3 text-center text-[0.9rem] font-semibold text-[var(--foreground)]"
                         style={{
-                            background: 'var(--card)',
-                            border: `1.5px solid ${colors[toast.type]}`,
-                            color: 'var(--foreground)',
-                            padding: '12px 22px',
-                            borderRadius: '40px',
-                            fontSize: '0.9rem',
-                            fontWeight: 600,
-                            boxShadow: `0 4px 20px rgba(0,0,0,0.4), 0 0 12px ${colors[toast.type]}55`,
-                            maxWidth: '320px',
-                            textAlign: 'center',
-                            whiteSpace: 'pre-line',
+                            border: `1.5px solid ${ACCENT[toast.type]}`,
+                            boxShadow: `var(--shadow-lg), 0 0 12px color-mix(in srgb, ${ACCENT[toast.type]} 33%, transparent)`,
                         }}
                     >
                         {toast.message}

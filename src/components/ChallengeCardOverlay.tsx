@@ -1,104 +1,53 @@
 'use client';
 
-import React from 'react';
-import { Movie } from '@/lib/data';
+import React, { useId } from 'react';
 import { Flame } from 'lucide-react';
+import { useLanguage } from '@/context/LanguageContext';
+import { formatYear } from '@/lib/movies';
+import { Poster } from '@/components/ui/Poster';
+import type { Challenge } from '@/context/ChallengeContext';
+import { Button } from '@/components/ui/Button';
 
 interface ChallengeCardOverlayProps {
-    movie: Movie;
-    sender: string;
+    challenge: Challenge;
     onResolve: (accepted: boolean) => void;
 }
 
-export default function ChallengeCardOverlay({ movie, sender, onResolve }: ChallengeCardOverlayProps) {
+/** Reto de un amigo que aparece sobre el feed hasta que se acepta o se pasa */
+export default function ChallengeCardOverlay({ challenge, onResolve }: ChallengeCardOverlayProps) {
+    const { t } = useLanguage();
+    const titleId = useId();
+    const { movie } = challenge;
+
     return (
-        <div style={{
-            position: 'absolute',
-            inset: 0,
-            zIndex: 50,
-            animation: 'popIn 0.3s ease-out'
-        }}>
-            {/* Fire/Glow Effect Container */}
-            <div style={{
-                position: 'relative',
-                width: '100%',
-                height: '100%',
-                borderRadius: '20px',
-                overflow: 'hidden',
-                boxShadow: '0 0 30px var(--destructive), 0 0 60px #e1b12c', // Fire glow
-                border: '4px solid var(--destructive)'
-            }}>
+        <section
+            aria-labelledby={titleId}
+            className="absolute inset-0 z-50 overflow-hidden rounded-[20px] border-4 border-[var(--destructive)] shadow-[0_0_30px_var(--destructive),0_0_60px_var(--warning)] animate-pop-in"
+        >
+            <Poster src={movie.image} alt="" sizes="400px" priority />
 
-                {/* Header Banner */}
-                <div style={{
-                    position: 'absolute', top: 0, left: 0, right: 0,
-                    background: 'linear-gradient(to bottom, var(--destructive), transparent)',
-                    padding: '20px',
-                    textAlign: 'center',
-                    zIndex: 10
-                }}>
-                    <div style={{
-                        color: 'white', fontWeight: '900', fontSize: '1.2rem',
-                        textTransform: 'uppercase', letterSpacing: '1px',
-                        textShadow: '0 2px 4px black'
-                    }}>
-                        <Flame size={18} className="inline-block mr-1 -mt-0.5 text-[var(--destructive)]" aria-hidden /> Retado por {sender} <Flame size={18} className="inline-block ml-1 -mt-0.5 text-[var(--destructive)]" aria-hidden />
-                    </div>
-                </div>
-
-                {/* Movie Image */}
-                <img
-                    src={movie.image}
-                    alt={movie.title}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                />
-
-                {/* Footer Controls */}
-                <div style={{
-                    position: 'absolute', bottom: 0, left: 0, right: 0,
-                    background: 'linear-gradient(to top, black 20%, transparent)',
-                    padding: '30px 20px',
-                    display: 'flex', flexDirection: 'column', gap: '15px'
-                }}>
-                    <div style={{ textAlign: 'center', marginBottom: '10px' }}>
-                        <h2 style={{ margin: 0, fontSize: '1.8rem', textShadow: '0 2px 4px black' }}>{movie.title}</h2>
-                        <span style={{ fontSize: '0.9rem', color: '#ddd' }}>{movie.year} • ¿Aceptas el reto?</span>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '20px', justifyContent: 'center' }}>
-                        <button
-                            onClick={() => onResolve(false)}
-                            style={{
-                                flex: 1, padding: '15px', borderRadius: '15px',
-                                background: 'rgba(255, 255, 255, 0.1)', border: '2px solid rgba(255, 255, 255, 0.3)',
-                                color: 'white', fontWeight: 'bold', fontSize: '1.1rem',
-                                backdropFilter: 'blur(5px)'
-                            }}
-                        >
-                            Pasar
-                        </button>
-                        <button
-                            onClick={() => onResolve(true)}
-                            style={{
-                                flex: 2, padding: '15px', borderRadius: '15px',
-                                background: 'linear-gradient(45deg, var(--destructive), #e1b12c)', border: 'none',
-                                color: 'white', fontWeight: '900', fontSize: '1.2rem',
-                                boxShadow: '0 5px 20px rgba(255, 71, 87, 0.4)',
-                                transform: 'scale(1.05)'
-                            }}
-                        >
-                            <Flame size={20} className="inline-block mr-1.5 -mt-0.5" aria-hidden /> ¡ACEPTAR!
-                        </button>
-                    </div>
-                </div>
+            <div className="absolute inset-x-0 top-0 z-10 bg-[linear-gradient(to_bottom,var(--destructive),transparent)] p-5 text-center">
+                <p className="flex items-center justify-center gap-1.5 text-lg font-black uppercase tracking-wide text-[var(--on-media)] [text-shadow:0_2px_4px_black]">
+                    <Flame size={18} className="text-[var(--warning)]" aria-hidden />
+                    {t.challengedBy(challenge.counterpartName)}
+                    <Flame size={18} className="text-[var(--warning)]" aria-hidden />
+                </p>
             </div>
 
-            <style jsx>{`
-                @keyframes popIn {
-                    from { transform: scale(0.8); opacity: 0; }
-                    to { transform: scale(1); opacity: 1; }
-                }
-            `}</style>
-        </div>
+            <div className="absolute inset-x-0 bottom-0 flex flex-col gap-4 bg-[linear-gradient(to_top,black_20%,transparent)] px-5 pb-7 pt-8 text-[var(--on-media)]">
+                <div className="text-center">
+                    <h2 id={titleId} className="font-display text-[1.8rem] font-extrabold leading-tight [text-shadow:0_2px_4px_black]">{movie.title}</h2>
+                    <span className="text-sm opacity-85">{formatYear(movie.year)} · {t.acceptChallengeQuestion}</span>
+                </div>
+                <div className="flex justify-center gap-5">
+                    <Button variant="outline" size="lg" onClick={() => onResolve(false)} className="flex-1">
+                        {t.pass}
+                    </Button>
+                    <Button size="lg" onClick={() => onResolve(true)} className="flex-[2]">
+                        <Flame size={20} aria-hidden /> {t.acceptChallenge}
+                    </Button>
+                </div>
+            </div>
+        </section>
     );
 }

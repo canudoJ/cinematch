@@ -1,443 +1,377 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { DoorOpen } from 'lucide-react';
+'use client';
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { getMovies, Movie } from '@/lib/data';
+import { DoorOpen, Heart, X, RefreshCw } from 'lucide-react';
+import { useAuth } from '@/context/AuthProvider';
+import { useLanguage } from '@/context/LanguageContext';
+import { useUser } from '@/context/UserContext';
+import { useDecks } from '@/context/DeckContext';
+import { useChallenge } from '@/context/ChallengeContext';
+import { useToast } from '@/components/ui/Toast';
+import { getMovies } from '@/lib/data';
+import { getUserRegion } from '@/lib/region';
+import { Spinner } from '@/components/ui/Spinner';
+import { Button, buttonVariants } from '@/components/ui/Button';
+import { GuestAccessButton } from './GuestAccessButton';
 import MovieCard from './MovieCard';
 import MovieDetailsModal from './MovieDetailsModal';
 import ShortlistView from './ShortlistView';
 import ChallengeCardOverlay from './ChallengeCardOverlay';
-import { useLanguage } from '@/context/LanguageContext';
-import { useUser } from '@/context/UserContext';
-import { getWatchLink } from '@/services/tmdb';
-import { useLobby } from '@/context/LobbyContext';
-import { useDecks } from '@/context/DeckContext';
-import { useChallenge } from '@/context/ChallengeContext';
-import { useToast } from '@/components/ui/Toast';
-import { useAuth } from '@/context/AuthProvider';
-import { GuestAccessButton } from './GuestAccessButton';
+import { FlyingPoster, type Flight } from './FlyingPoster';
+import type { Movie } from '@/types';
 
 interface SwipeDeckProps {
+    /** Hay un panel abierto encima (videoteca, barajas…): no mostrar el reto */
     isOverlayBlocked?: boolean;
 }
 
+type Direction = 'left' | 'right';
+
+const SWIPE_THRESHOLD = 80;
+const SWIPE_ANIMATION_MS = 300;
+/** IDs ya mostrados en esta pestaña: el feed no los repite hasta cerrarla */
+const SEEN_KEY = 'cinematch_seen_movies';
+
+function readSeen(): string[] {
+    try {
+        const raw = sessionStorage.getItem(SEEN_KEY);
+        return raw ? (JSON.parse(raw) as string[]) : [];
+    } catch {
+        return [];
+    }
+}
+
+function markSeen(id: string) {
+    try {
+        const seen = readSeen();
+        if (!seen.includes(id)) sessionStorage.setItem(SEEN_KEY, JSON.stringify([...seen, id]));
+    } catch {
+        // sessionStorage no disponible: se podrían repetir títulos, nada más
+    }
+}
+
+interface Progress {
+    key: string;
+    index: number;
+    shortlist: Movie[];
+    showShortlist: boolean;
+}
+
 export default function SwipeDeck({ isOverlayBlocked = false }: SwipeDeckProps) {
+    const { user } = useAuth();
     const { t, language } = useLanguage();
     const { platforms, contentTypes, preferredGenres, addLike } = useUser();
-    const { config: lobbyConfig } = useLobby();
-    const { activeDeck, setActiveDeck } = useDecks();
+    const { activeDeck, setActiveDeck, hydrateDeck } = useDecks();
     const { pendingChallenges, resolveChallenge } = useChallenge();
     const { showToast } = useToast();
-    const { user } = useAuth();
-    const activeChallenge = pendingChallenges[0] ?? null;
 
-    const activePlatforms = lobbyConfig ? lobbyConfig.platforms : platforms;
-    const activeTypes = lobbyConfig ? lobbyConfig.contentTypes : contentTypes;
-
-    const [currentIndex, setCurrentIndex] = useState(0);
-    const [direction, setDirection] = useState<'left' | 'right' | null>(null);
-    const [loadedMovies, setLoadedMovies] = useState<Movie[]>([]);
-    const [loading, setLoading] = useState(true);
-
-    const [shortlist, setShortlist] = useState<Movie[]>([]);
-    const [showShortlist, setShowShortlist] = useState(false);
-
-    // Animación de vuelo — solo se muestra en modo deck (cuando existe el icono cesta)
-    const [flyingItem, setFlyingItem] = useState<{ image: string; id: string } | null>(null);
-
-    const [detailsMovie, setDetailsMovie] = useState<Movie | null>(null);
-
-    // Touch / drag swipe state
-    const dragStartX = useRef<number | null>(null);
-    const dragCurrentX = useRef<number>(0);
-    const isDragging = useRef(false);
-    const [dragOffset, setDragOffset] = useState(0);
-    const SWIPE_THRESHOLD = 80;
-
-    // --- Deduplicación por sesión ---
-    // Persiste en sessionStorage: se limpia al cerrar la pestaña, no entre rutas.
-    const seenIdsRef = useRef<Set<string>>(new Set());
+    // --- Carga: la clave identifica qué se muestra; "cargando" = la clave aún no coincide
+    const [reloadCount, setReloadCount] = useState(0);
+    const feedKey = activeDeck
+        ? `deck:${activeDeck.id}:${reloadCount}`
+        : `feed:${platforms.join(',')}|${contentTypes.join(',')}|${preferredGenres.join(',')}|${language}|${reloadCount}`;
+    const [feed, setFeed] = useState<{ key: string; movies: Movie[] }>({ key: '', movies: [] });
+    const loading = feed.key !== feedKey;
+    const needsSetup = !activeDeck && (platforms.length === 0 || contentTypes.length === 0);
 
     useEffect(() => {
-        try {
-            const stored = sessionStorage.getItem('cinematch_seen_movies');
-            if (stored) seenIdsRef.current = new Set(JSON.parse(stored));
-        } catch { /* sessionStorage no disponible */ }
-    }, []);
-
-    const markSeen = useCallback((id: string) => {
-        seenIdsRef.current.add(id);
-        try {
-            sessionStorage.setItem('cinematch_seen_movies', JSON.stringify([...seenIdsRef.current]));
-        } catch { /* ignore */ }
-    }, []);
-
-    useEffect(() => {
-        initSession();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activePlatforms, activeTypes, preferredGenres, activeDeck]);
-
-    async function initSession() {
-        setLoading(true);
-        setLoadedMovies([]);
-        setShortlist([]);
-        setShowShortlist(false);
-        setDetailsMovie(null);
-
-        let fetchedMovies: Movie[] = [];
-
-        if (activeDeck && activeDeck.movies.length > 0) {
-            fetchedMovies = activeDeck.movies;
-        } else {
-            if (activePlatforms.length === 0 || activeTypes.length === 0) {
-                setLoading(false);
-                return;
-            }
-            const region = (typeof navigator !== 'undefined' ? (navigator.language.split('-')[1]?.toUpperCase() || 'ES') : 'ES') as 'ES' | 'US';
-            fetchedMovies = await getMovies(activePlatforms, activeTypes, region, preferredGenres, [...seenIdsRef.current], language);
-        }
-
-        const filteredMovies = fetchedMovies.filter(m => {
-            if (m.source === 'challenge') return !lobbyConfig;
-            return true;
+        if (needsSetup) return;
+        let cancelled = false;
+        const request = activeDeck
+            ? hydrateDeck(activeDeck).then(deck => deck.movies)
+            : getMovies({ platforms, types: contentTypes, region: getUserRegion(), genreIds: preferredGenres, seenIds: readSeen(), language });
+        void request.then(movies => {
+            if (!cancelled) setFeed({ key: feedKey, movies });
         });
+        return () => {
+            cancelled = true;
+        };
+    }, [feedKey, needsSetup, activeDeck, hydrateDeck, platforms, contentTypes, preferredGenres, language]);
 
-        setLoadedMovies(filteredMovies);
-        setCurrentIndex(0);
-        setLoading(false);
-    }
+    const movies = useMemo(() => (loading ? [] : feed.movies), [loading, feed.movies]);
 
-    const handleSwipe = (dir: 'left' | 'right') => {
-        if (direction) return;
+    // --- Progreso dentro de la carga actual (se reinicia solo al cambiar la clave)
+    const [progress, setProgress] = useState<Progress>({ key: '', index: 0, shortlist: [], showShortlist: false });
+    const current = useMemo<Progress>(
+        () => (progress.key === feedKey ? progress : { key: feedKey, index: 0, shortlist: [], showShortlist: false }),
+        [progress, feedKey],
+    );
+    const currentMovie = movies[current.index];
+    const nextMovie = movies[current.index + 1];
 
-        setDirection(dir);
-        const currentMovie = loadedMovies[currentIndex];
+    const [direction, setDirection] = useState<Direction | null>(null);
+    const [detailsMovie, setDetailsMovie] = useState<Movie | null>(null);
+    // Pósters volando hacia el contador de la selección (modo baraja)
+    const [flights, setFlights] = useState<Flight[]>([]);
+    const [landings, setLandings] = useState(0);
+    const cardAreaRef = useRef<HTMLDivElement>(null);
+    const basketRef = useRef<HTMLButtonElement>(null);
+    // El contador sube cuando el póster aterriza, no cuando despega
+    const basketCount = current.shortlist.filter(movie => !flights.some(f => f.id === movie.id)).length;
+    const [drag, setDrag] = useState({ active: false, offset: 0 });
+    const dragStartX = useRef<number | null>(null);
 
-        // Animación de vuelo SOLO en modo deck (cuando existe el icono cesta 💕 en esquina)
-        if (dir === 'right' && activeDeck) {
-            setFlyingItem({ image: currentMovie.image, id: currentMovie.id });
-            setTimeout(() => setFlyingItem(null), 800);
+    // Reto pendiente encima del feed (no en modo baraja)
+    const activeChallenge = !activeDeck && !isOverlayBlocked ? pendingChallenges[0] ?? null : null;
+
+    /** Lanza el póster desde el centro de la tarjeta hasta el contador, medidos ahora mismo */
+    const launchFlight = useCallback((movie: Movie) => {
+        const card = cardAreaRef.current?.getBoundingClientRect();
+        const basket = basketRef.current?.getBoundingClientRect();
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (!card || !basket || reducedMotion) {
+            setLandings(n => n + 1);
+            return;
         }
+        const width = Math.min(card.width * 0.55, (card.height * 0.8) / 1.5, 220);
+        setFlights(list => [
+            ...list.filter(f => f.id !== movie.id),
+            {
+                id: movie.id,
+                image: movie.image,
+                from: { x: card.left + card.width / 2, y: card.top + card.height / 2, width },
+                to: { x: basket.left + basket.width / 2, y: basket.top + basket.height / 2 },
+            },
+        ]);
+    }, []);
 
-        setTimeout(() => {
-            // Marcar como visto para no repetir en esta sesión
+    const handleLanded = useCallback((id: string) => {
+        setFlights(list => list.filter(f => f.id !== id));
+        setLandings(n => n + 1);
+    }, []);
+
+    const handleSwipe = useCallback((dir: Direction) => {
+        if (direction || !currentMovie) return;
+        setDirection(dir);
+        if (dir === 'right' && activeDeck) launchFlight(currentMovie);
+
+        window.setTimeout(() => {
             markSeen(currentMovie.id);
+            if (dir === 'right' && !activeDeck) void addLike(currentMovie);
 
-            if (dir === 'right') {
-                getWatchLink(currentMovie.id, currentMovie.type, platforms, 'ES', currentMovie.title).then(({ link, providerName, providers }) => {
-                    const movieToSave = {
-                        ...currentMovie,
-                        providerName: providerName || undefined,
-                        watchLink: link || undefined,
-                        providers: providers || []
-                    };
-                    if (activeDeck) {
-                        setShortlist(prev => [...prev, movieToSave]);
-                    } else {
-                        addLike(movieToSave);
-                    }
+            const isLast = current.index >= movies.length - 1;
+            if (isLast && !activeDeck) {
+                setReloadCount(c => c + 1); // fin del lote: cargar más sin repetir
+            } else {
+                setProgress({
+                    key: feedKey,
+                    index: isLast ? current.index : current.index + 1,
+                    shortlist: dir === 'right' && activeDeck ? [...current.shortlist, currentMovie] : current.shortlist,
+                    showShortlist: isLast,
                 });
             }
+            setDirection(null);
+        }, SWIPE_ANIMATION_MS);
+    }, [direction, currentMovie, activeDeck, addLike, current, movies.length, feedKey, launchFlight]);
 
-            if (currentIndex < loadedMovies.length - 1) {
-                setCurrentIndex(prev => prev + 1);
-                setDirection(null);
-            } else {
-                if (activeDeck) {
-                    setShowShortlist(true);
-                } else {
-                    // Se acabaron las de este lote — cargar más sin repetir las ya vistas
-                    initSession();
-                }
-                setDirection(null);
-            }
-        }, 300);
+    // Atajos en escritorio: ← descartar, → me gusta (no mientras hay un modal o un reto encima)
+    const keyboardEnabled = !activeChallenge && !detailsMovie && !current.showShortlist;
+    useEffect(() => {
+        if (!keyboardEnabled) return;
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+            if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+            const target = event.target as HTMLElement | null;
+            if (target?.closest('input, textarea, select, [contenteditable="true"], [role="tablist"]')) return;
+            if (document.querySelector('[aria-modal="true"]')) return;
+            event.preventDefault();
+            handleSwipe(event.key === 'ArrowRight' ? 'right' : 'left');
+        };
+        document.addEventListener('keydown', onKeyDown);
+        return () => document.removeEventListener('keydown', onKeyDown);
+    }, [keyboardEnabled, handleSwipe]);
+
+    const handleResolveChallenge = async (accepted: boolean) => {
+        if (!activeChallenge) return;
+        const ok = await resolveChallenge(activeChallenge.id, accepted);
+        if (!ok) {
+            showToast(t.genericError, 'error');
+            return;
+        }
+        if (accepted) {
+            await addLike(activeChallenge.movie);
+            showToast(t.challengeAccepted, 'success');
+        }
     };
 
-    // --- Drag / Touch handlers ---
-    const onDragStart = (clientX: number) => {
+    // --- Gestos (ratón y táctil)
+    const onDragStart = (x: number) => {
         if (direction) return;
-        dragStartX.current = clientX;
-        dragCurrentX.current = clientX;
-        isDragging.current = true;
+        dragStartX.current = x;
+        setDrag({ active: true, offset: 0 });
     };
-    const onDragMove = (clientX: number) => {
-        if (!isDragging.current || dragStartX.current === null) return;
-        dragCurrentX.current = clientX;
-        setDragOffset(clientX - dragStartX.current);
+    const onDragMove = (x: number) => {
+        if (dragStartX.current !== null) setDrag({ active: true, offset: x - dragStartX.current });
     };
     const onDragEnd = () => {
-        if (!isDragging.current) return;
-        isDragging.current = false;
-        const offset = dragCurrentX.current - (dragStartX.current ?? 0);
+        if (dragStartX.current === null) return;
         dragStartX.current = null;
-        if (Math.abs(offset) >= SWIPE_THRESHOLD) {
-            setDragOffset(0);
-            handleSwipe(offset > 0 ? 'right' : 'left');
-        } else {
-            setDragOffset(0);
-        }
-    };
-    const onTouchStart = (e: React.TouchEvent) => onDragStart(e.touches[0].clientX);
-    const onTouchMove = (e: React.TouchEvent) => onDragMove(e.touches[0].clientX);
-    const onTouchEnd = () => onDragEnd();
-    const onMouseDown = (e: React.MouseEvent) => { e.preventDefault(); onDragStart(e.clientX); };
-    const onMouseMove = (e: React.MouseEvent) => { if (isDragging.current) onDragMove(e.clientX); };
-    const onMouseUp = () => onDragEnd();
-    const onMouseLeave = () => { if (isDragging.current) onDragEnd(); };
-
-    const handleResolveChallenge = (accepted: boolean) => {
-        if (!activeChallenge) return;
-
-        if (accepted) {
-            const m = activeChallenge.movie;
-            getWatchLink(m.id, m.type, platforms, 'ES', m.title).then(({ link, providerName, providers }) => {
-                addLike({
-                    ...m,
-                    providerName: providerName || undefined,
-                    watchLink: link || undefined,
-                    providers: providers || []
-                });
-                // La animación de vuelo solo tiene sentido si hay cesta (modo deck)
-                if (activeDeck) {
-                    setFlyingItem({ image: m.image, id: m.id });
-                    setTimeout(() => setFlyingItem(null), 800);
-                }
-            });
-        }
-
-        resolveChallenge(accepted);
+        const { offset } = drag;
+        setDrag({ active: false, offset: 0 });
+        if (Math.abs(offset) >= SWIPE_THRESHOLD) handleSwipe(offset > 0 ? 'right' : 'left');
     };
 
-    const handleModalLike = () => {
-        handleSwipe('right');
-    };
-
-    if (loading) {
+    // --- Estados especiales
+    if (needsSetup) {
         return (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--muted-foreground)' }}>
-                {t.loadingData}
+            <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+                <p className="max-w-sm text-[var(--muted-foreground)]">{user ? t.setupDescription : t.visitorIntro}</p>
+                {user ? (
+                    <Link href="/?open=filters" className={buttonVariants({ size: 'lg' })}>{t.configure}</Link>
+                ) : (
+                    <>
+                        <GuestAccessButton variant="default" />
+                        <Link href="/auth/login" className="text-sm text-[var(--muted-foreground)]">
+                            {t.haveAccountLogin} <span className="font-bold text-[var(--primary)]">{t.logIn}</span>
+                        </Link>
+                    </>
+                )}
             </div>
         );
     }
 
-    if (showShortlist) {
+    if (loading) {
+        return <Spinner label={t.loadingData} className="h-full" />;
+    }
+
+    // "Romper el hielo" es un modo de juego (baraja temporal): se sale de la sala, no de una baraja
+    const exitLabel = activeDeck?.id.startsWith('temp-') ? t.exitLobby : t.exitDeck;
+
+    if (current.showShortlist && activeDeck) {
         return (
             <ShortlistView
-                movies={shortlist}
+                movies={current.shortlist}
+                exitLabel={exitLabel}
                 onClose={() => setActiveDeck(null)}
-                onRestart={initSession}
+                onRestart={() => setReloadCount(c => c + 1)}
             />
         );
     }
 
-    if (loadedMovies.length === 0) {
-        const needsSetup = activePlatforms.length === 0 || activeTypes.length === 0;
+    if (!currentMovie) {
         return (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', flexDirection: 'column', gap: 16, textAlign: 'center', padding: '0 24px' }}>
-                <p style={{ color: 'var(--muted-foreground)' }}>
-                    {!needsSetup
-                        ? t.noMoreMovies
-                        : user
-                            ? t.setupDescription
-                            : (language === 'es'
-                                ? 'Desliza películas y series de tus plataformas, guarda las que te gusten y decide con tus amigos qué ver. Pruébalo sin crear cuenta.'
-                                : 'Swipe through movies and series from your platforms, save the ones you like and decide with friends what to watch. Try it without an account.')}
-                </p>
-                {needsSetup && !user && (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-                        <GuestAccessButton variant="default" />
-                        <Link href="/auth/login" style={{ color: 'var(--muted-foreground)', fontSize: 14 }}>
-                            ¿Ya tienes cuenta? <span style={{ color: 'var(--primary)', fontWeight: 700 }}>Inicia sesión</span>
-                        </Link>
-                    </div>
-                )}
-                {needsSetup && user && (
-                    <Link
-                        href="/setup"
-                        className="btn-primary"
-                        style={{ width: 'auto', paddingInline: 32 }}
-                    >
-                        {t.configure}
-                    </Link>
-                )}
+            <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+                <p className="text-[var(--muted-foreground)]">{t.noMoreMovies}</p>
+                <Button variant="outline" onClick={() => setReloadCount(c => c + 1)}>
+                    <RefreshCw size={16} aria-hidden /> {t.loadMore}
+                </Button>
             </div>
         );
     }
 
-    const currentMovie = loadedMovies[currentIndex];
-    const nextMovie = loadedMovies[currentIndex + 1];
-    const progress = (currentIndex / loadedMovies.length) * 100;
+    const progressPercent = movies.length ? (current.index / movies.length) * 100 : 0;
+    const cardTransform = direction === 'left'
+        ? 'translateX(-130%) rotate(-25deg)'
+        : direction === 'right' && !activeDeck
+            ? 'translateX(130%) rotate(25deg)'
+            : `translateX(${drag.offset}px) rotate(${drag.offset * 0.08}deg)`;
+    const stampOpacity = direction ? 1 : Math.min(Math.abs(drag.offset) / SWIPE_THRESHOLD, 1);
 
     return (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', height: '100%' }}>
-
-            <style jsx>{`
-                @keyframes flyToBasket {
-                    0%   { top: 40%; left: 50%; transform: translate(-50%, -50%) scale(1); opacity: 1; }
-                    20%  { transform: translate(-50%, -50%) scale(1.1); }
-                    100% { top: 90%; left: 90%; transform: translate(-50%, -50%) scale(0.1); opacity: 0.5; }
-                }
-                .flying-card {
-                    position: absolute;
-                    width: 200px;
-                    aspect-ratio: 2/3;
-                    z-index: 100;
-                    border-radius: 12px;
-                    pointer-events: none;
-                    animation: flyToBasket 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-                    box-shadow: 0 10px 30px rgba(75, 255, 179, 0.5);
-                    border: 2px solid var(--secondary);
-                }
-            `}</style>
-
-            {/* Movie Details Modal */}
-            {detailsMovie && (
-                <MovieDetailsModal
-                    movie={detailsMovie}
-                    onClose={() => setDetailsMovie(null)}
-                    onLike={handleModalLike}
-                />
-            )}
-
-            {/* Challenge overlay */}
-            {activeChallenge && !isOverlayBlocked && !activeDeck && (
-                <div style={{ position: 'absolute', inset: 0, zIndex: 9999 }}>
-                    <ChallengeCardOverlay
-                        movie={activeChallenge.movie}
-                        sender={activeChallenge.sender}
-                        onResolve={handleResolveChallenge}
-                    />
-                </div>
-            )}
-
-            {/* Animación de vuelo hacia la cesta (solo modo deck) */}
-            {flyingItem && (
-                <img src={flyingItem.image} className="flying-card" alt="" />
-            )}
-
-            {/* Barra de progreso (solo modo deck) */}
+        <div className="relative flex h-full flex-1 flex-col">
             {activeDeck && (
-                <div style={{ marginBottom: '15px', padding: '0 10px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#888', marginBottom: '5px' }}>
-                        <span>{t.card} {currentIndex + 1} {t.of} {loadedMovies.length}</span>
-                        <span>{shortlist.length} {t.inBasket}</span>
+                <div className="mb-4 px-2.5">
+                    <div className="text-caption mb-1.5 flex justify-between">
+                        <span>{t.cardProgress(current.index + 1, movies.length)}</span>
+                        <span>{current.shortlist.length} {t.inBasket}</span>
                     </div>
-                    <div style={{ width: '100%', height: '6px', background: 'var(--muted)', borderRadius: '3px', overflow: 'hidden' }}>
-                        <div style={{ width: `${progress}%`, height: '100%', background: 'var(--secondary)', transition: 'width 0.3s ease' }} />
+                    <div
+                        className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--muted)]"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={movies.length}
+                        aria-valuenow={current.index}
+                    >
+                        <div className="h-full bg-[var(--secondary)] transition-[width] duration-300" style={{ width: `${progressPercent}%` }} />
                     </div>
                 </div>
             )}
 
-            {/* Cards stack */}
-            <div style={{ flex: 1, position: 'relative', marginBottom: activeDeck ? '20px' : '30px' }}>
+            <div ref={cardAreaRef} className={`relative flex-1 ${activeDeck ? 'mb-5' : 'mb-7'}`}>
                 {nextMovie && (
-                    <div style={{
-                        position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-                        transform: 'scale(0.95) translateY(10px)', opacity: 0.5, zIndex: 0
-                    }}>
+                    <div className="absolute inset-0 z-0 translate-y-2.5 scale-95 opacity-50">
                         <MovieCard movie={nextMovie} />
                     </div>
                 )}
 
                 <div
+                    className="absolute inset-0 z-10 select-none"
                     style={{
-                        position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-                        zIndex: 10,
-                        transform: direction === 'left'
-                            ? 'translateX(-130%) rotate(-25deg)'
-                            : direction === 'right' && !activeDeck
-                            ? 'translateX(130%) rotate(25deg)'
-                            : isDragging.current || dragOffset !== 0
-                            ? `translateX(${dragOffset}px) rotate(${dragOffset * 0.08}deg)`
-                            : 'translate(0) rotate(0)',
+                        transform: cardTransform,
                         transition: direction
-                            ? 'transform 0.35s cubic-bezier(0.25, 1, 0.5, 1), opacity 0.35s'
-                            : isDragging.current || dragOffset !== 0
-                            ? 'none'
-                            : 'transform 0.3s cubic-bezier(0.25, 1, 0.5, 1)',
+                            ? `transform ${SWIPE_ANIMATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1), opacity ${SWIPE_ANIMATION_MS}ms`
+                            : drag.active ? 'none' : 'transform 0.3s cubic-bezier(0.25, 1, 0.5, 1)',
                         opacity: direction ? 0 : 1,
-                        cursor: isDragging.current ? 'grabbing' : 'grab',
-                        userSelect: 'none',
+                        cursor: drag.active ? 'grabbing' : 'grab',
                     }}
-                    onTouchStart={onTouchStart}
-                    onTouchMove={onTouchMove}
-                    onTouchEnd={onTouchEnd}
-                    onMouseDown={onMouseDown}
-                    onMouseMove={onMouseMove}
-                    onMouseUp={onMouseUp}
-                    onMouseLeave={onMouseLeave}
+                    onTouchStart={e => onDragStart(e.touches[0].clientX)}
+                    onTouchMove={e => onDragMove(e.touches[0].clientX)}
+                    onTouchEnd={onDragEnd}
+                    onMouseDown={e => { e.preventDefault(); onDragStart(e.clientX); }}
+                    onMouseMove={e => { if (drag.active) onDragMove(e.clientX); }}
+                    onMouseUp={onDragEnd}
+                    onMouseLeave={() => { if (drag.active) onDragEnd(); }}
                 >
-                    <MovieCard
-                        movie={currentMovie}
-                        onOpenDetails={() => setDetailsMovie(currentMovie)}
-                    />
+                    <MovieCard movie={currentMovie} onOpenDetails={() => setDetailsMovie(currentMovie)} priority />
 
-                    {(direction === 'right' || dragOffset > 20) && !activeDeck && (
-                        <div style={{
-                            position: 'absolute', top: 40, left: 40,
-                            border: '4px solid var(--secondary)', color: 'var(--secondary)',
-                            fontSize: '32px', fontWeight: 800, padding: '5px 10px',
-                            borderRadius: '8px', transform: 'rotate(-15deg)',
-                            opacity: direction ? 1 : Math.min(Math.abs(dragOffset) / SWIPE_THRESHOLD, 1),
-                            pointerEvents: 'none',
-                        }}>{t.like}</div>
+                    {(direction === 'right' || drag.offset > 20) && !activeDeck && (
+                        <div className="pointer-events-none absolute left-10 top-10 z-20 -rotate-[15deg] rounded-lg border-4 border-[var(--secondary)] px-2.5 py-1 text-[32px] font-extrabold text-[var(--secondary)]" style={{ opacity: stampOpacity }} aria-hidden>
+                            {t.like}
+                        </div>
                     )}
-                    {(direction === 'left' || dragOffset < -20) && (
-                        <div style={{
-                            position: 'absolute', top: 40, right: 40,
-                            border: '4px solid var(--destructive)', color: 'var(--destructive)',
-                            fontSize: '32px', fontWeight: 800, padding: '5px 10px',
-                            borderRadius: '8px', transform: 'rotate(15deg)',
-                            opacity: direction ? 1 : Math.min(Math.abs(dragOffset) / SWIPE_THRESHOLD, 1),
-                            pointerEvents: 'none',
-                        }}>{t.nope}</div>
+                    {(direction === 'left' || drag.offset < -20) && (
+                        <div className="pointer-events-none absolute right-10 top-10 z-20 rotate-[15deg] rounded-lg border-4 border-[var(--destructive)] px-2.5 py-1 text-[32px] font-extrabold text-[var(--destructive)]" style={{ opacity: stampOpacity }} aria-hidden>
+                            {t.nope}
+                        </div>
                     )}
                 </div>
-            </div>
 
-            {/* Controls */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '30px', paddingBottom: '10px', position: 'relative' }}>
-                <button className="btn-icon dislike" onClick={() => handleSwipe('left')} disabled={!!direction} aria-label="No me gusta">✕</button>
-                <button className="btn-icon like" onClick={() => handleSwipe('right')} disabled={!!direction} aria-label={t.like || 'Me gusta'}>♥</button>
-
-                {activeDeck && (
-                    <>
-                        {/* Basket button (bottom right) */}
-                        <button
-                            onClick={() => setShowShortlist(true)}
-                            style={{
-                                position: 'absolute', right: 10, bottom: 10,
-                                width: '50px', height: '50px', borderRadius: '50%',
-                                background: 'var(--card)', border: '2px solid var(--secondary)',
-                                color: 'var(--secondary)', display: 'flex', flexDirection: 'column',
-                                alignItems: 'center', justifyContent: 'center',
-                                boxShadow: '0 4px 12px rgba(0,0,0,0.5)', cursor: 'pointer', zIndex: 20
-                            }}
-                        >
-                            <span style={{ fontSize: '1.2rem' }}>💕</span>
-                            <span style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>{shortlist.length}</span>
-                        </button>
-
-                        {/* Exit deck button (bottom left) */}
-                        <button
-                            onClick={() => setActiveDeck(null)}
-                            style={{
-                                position: 'absolute', left: 10, bottom: 10,
-                                padding: '8px 14px', borderRadius: '25px',
-                                background: 'var(--destructive)',
-                                color: 'white', border: 'none',
-                                fontWeight: 'bold', fontSize: '0.8rem',
-                                cursor: 'pointer', zIndex: 20,
-                                display: 'flex', alignItems: 'center', gap: '6px',
-                                boxShadow: '0 4px 12px rgba(255,0,85,0.35)',
-                            }}
-                        >
-                            <DoorOpen size={16} aria-hidden />
-                            <span>{t.exitDeck}</span>
-                        </button>
-                    </>
+                {activeChallenge && (
+                    <ChallengeCardOverlay challenge={activeChallenge} onResolve={accepted => void handleResolveChallenge(accepted)} />
                 )}
             </div>
+
+            <div className="relative flex items-center justify-center gap-8 pb-2.5">
+                {activeDeck && (
+                    <Button variant="danger" size="sm" className="absolute bottom-2.5 left-2.5 max-sm:h-11 max-sm:w-11 max-sm:px-0" onClick={() => setActiveDeck(null)} aria-label={exitLabel}>
+                        <DoorOpen size={18} aria-hidden /> <span className="hidden sm:inline">{exitLabel}</span>
+                    </Button>
+                )}
+                <button type="button" className="btn-icon dislike" onClick={() => handleSwipe('left')} disabled={!!direction} aria-label={t.dislike} aria-keyshortcuts="ArrowLeft" title={`${t.dislike} (←)`}>
+                    <X size={26} aria-hidden />
+                </button>
+                <button type="button" className="btn-icon like" onClick={() => handleSwipe('right')} disabled={!!direction} aria-label={t.iLikeIt} aria-keyshortcuts="ArrowRight" title={`${t.iLikeIt} (→)`}>
+                    <Heart size={26} fill="currentColor" aria-hidden />
+                </button>
+                {activeDeck && (
+                    <button
+                        ref={basketRef}
+                        type="button"
+                        onClick={() => setProgress({ ...current, showShortlist: true })}
+                        aria-label={t.openShortlist(basketCount)}
+                        className="absolute bottom-2.5 right-2.5 flex h-[50px] w-[50px] items-center justify-center rounded-full border-2 border-[var(--secondary)] bg-[var(--card)] text-[var(--secondary)] shadow-[var(--shadow-lg)]"
+                    >
+                        {/* La clave cambia con cada aterrizaje: el contenido da un pequeño salto */}
+                        <span key={landings} className={`flex flex-col items-center ${landings > 0 ? 'animate-bump' : ''}`}>
+                            <Heart size={18} fill="currentColor" aria-hidden />
+                            <span className="text-xs font-bold">{basketCount}</span>
+                        </span>
+                    </button>
+                )}
+            </div>
+
+            {flights.map(flight => (
+                <FlyingPoster key={flight.id} flight={flight} onLanded={handleLanded} />
+            ))}
+
+            {detailsMovie && (
+                <MovieDetailsModal
+                    movie={detailsMovie}
+                    onClose={() => setDetailsMovie(null)}
+                    onLike={detailsMovie.id === currentMovie.id ? () => handleSwipe('right') : undefined}
+                />
+            )}
         </div>
     );
 }

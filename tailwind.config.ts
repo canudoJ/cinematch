@@ -1,24 +1,13 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
-  darkMode: "class",
-  content: [
-    "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
-    "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
-    "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
-  ],
+  content: ["./src/**/*.{ts,tsx}"],
   theme: {
-    container: {
-      center: true,
-      padding: "2rem",
-      screens: {
-        "2xl": "1400px",
-      },
-    },
     extend: {
       fontFamily: {
         sans: ["var(--font-geist-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ["var(--font-geist-mono)", "ui-monospace", "monospace"],
+        display: ["var(--font-display)", "var(--font-geist-sans)", "ui-sans-serif", "sans-serif"],
       },
       colors: {
         border: "var(--border)",
@@ -51,14 +40,6 @@ const config: Config = {
         sm: "var(--radius-sm)",
       },
       keyframes: {
-        "accordion-down": {
-          from: { height: "0" },
-          to: { height: "var(--radix-accordion-content-height)" },
-        },
-        "accordion-up": {
-          from: { height: "var(--radix-accordion-content-height)" },
-          to: { height: "0" },
-        },
         "fade-in": {
           from: { opacity: "0", transform: "translateY(10px)" },
           to: { opacity: "1", transform: "translateY(0)" },
@@ -67,12 +48,36 @@ const config: Config = {
           from: { transform: "scale(0.9)", opacity: "0" },
           to: { transform: "scale(1)", opacity: "1" },
         },
+        "slide-up": {
+          from: { transform: "translateY(16px)", opacity: "0" },
+          to: { transform: "translateY(0)", opacity: "1" },
+        },
+        // Pequeño salto al recibir algo (contador de la selección)
+        bump: {
+          "0%, 100%": { transform: "scale(1)" },
+          "40%": { transform: "scale(1.35)" },
+        },
+        // Brillo que respira (llamadas a la acción destacadas)
+        glow: {
+          "0%, 100%": { boxShadow: "0 0 16px var(--primary-glow)" },
+          "50%": { boxShadow: "0 0 34px var(--primary-glow), 0 0 8px var(--primary-glow)" },
+        },
       },
       animation: {
-        "accordion-down": "accordion-down 0.2s ease-out",
-        "accordion-up": "accordion-up 0.2s ease-out",
-        "fade-in": "fade-in 0.5s ease-out forwards",
-        "pop-in": "pop-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards",
+        "fade-in": "fade-in 0.4s ease-out both",
+        "pop-in": "pop-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) both",
+        "slide-up": "slide-up 0.35s ease-out both",
+        "spin-slow": "spin 3s linear infinite",
+        bump: "bump 0.35s ease-out",
+        glow: "glow 2.4s ease-in-out infinite",
+      },
+      zIndex: {
+        dropdown: "var(--z-dropdown)",
+        modal: "var(--z-modal)",
+        "modal-nested": "var(--z-modal-nested)",
+        overlay: "var(--z-overlay)",
+        dialog: "var(--z-dialog)",
+        toast: "var(--z-toast)",
       },
     },
   },
