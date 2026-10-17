@@ -6,7 +6,7 @@ CineMatch resuelve el clásico "¿qué vemos esta noche?". En lugar de navegar l
 
 > Proyecto final de Grado Superior desarrollado por **Javier Canudo Tavara**.
 
-**Demo privada:** https://cinematch-demo.vercel.app (se accede con la contraseña facilitada). Dentro, pulsa **"Probar sin registrarse"** para entrar como invitado, sin email ni contraseña: la cuenta de invitado llega con un amigo (`cinematch`), un reto pendiente y barajas públicas para jugar.
+**Demo:** https://cinematch-demo.vercel.app · pulsa **"Probar sin registrarse"** para entrar como invitado, sin email ni contraseña: la cuenta de invitado llega con un amigo (`cinematch`), un reto pendiente y barajas públicas para jugar.
 
 ---
 

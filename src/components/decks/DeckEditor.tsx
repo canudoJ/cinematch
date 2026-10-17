@@ -140,7 +140,7 @@ export function DeckEditor({ deck, onDone, onCancel }: DeckEditorProps) {
                 ) : results && results.length === 0 ? (
                     <p className="text-center text-sm text-[var(--muted-foreground)]">{t.noSearchResults}</p>
                 ) : results ? (
-                    <ul className="grid max-h-[220px] grid-cols-[repeat(auto-fill,minmax(80px,1fr))] gap-2.5 overflow-y-auto">
+                    <ul className="grid max-h-[220px] shrink-0 grid-cols-[repeat(auto-fill,minmax(80px,1fr))] gap-2.5 overflow-y-auto">
                         {results.map(movie => {
                             const isSelected = selected.some(m => m.id === movie.id);
                             return (
